@@ -74,6 +74,20 @@ LAYER_VOLUME_CM3 = TWO_CUFT_CM3 * LAYER_VOLUME_FRACTION
 
 PROGENY_MULTIPLIER = 3.0  # Pb-210 + Bi-210 + Po-210 at secular equilibrium
 
+# CALIBRATION_CONSTANT was fit against two known reference outputs from the
+# real Waste Disposal screen, both at "Selected time = 100 years" and the
+# "5 inch layer" method:
+#   activity=900,    12 gal, eff=95%, 30 days -> Total Pb-210 = 2.06E+05 pCi, 31.99 pCi/g
+#   activity=120000, 12 gal, eff=90%, 30 days -> Total Pb-210 = 2.60E+07 pCi, 4040.70 pCi/g
+# A plain "activity * volume * efficiency * days" formula overshoots both of
+# those by a consistent ~5.4x, so this constant divides that out. It is a
+# curve fit to match your two examples, NOT derived from a first-principles
+# radon/GAC mass-balance model (I don't have your source formula/spec for
+# how "days operating" turns into captured activity). If you can share more
+# known input/output pairs, or the underlying formula, I can replace this
+# with something exact instead of calibrated.
+CALIBRATION_CONSTANT = 5.4056
+
 
 def pb210_growth_fraction(years: float) -> float:
     """Fraction of equilibrium Pb-210 activity reached after `years` of ingrowth."""
@@ -86,10 +100,20 @@ def total_pb210_pci_at_equilibrium(activity_pci_per_l, volume_val, unit,
     """
     Total Pb-210 activity (pCi) that will eventually grow in, based on the
     radon activity captured by the GAC bed over the stated operating period.
+    See CALIBRATION_CONSTANT above for why this isn't a bare multiplication.
     """
     volume_l = volume_val if unit == "Liters" else volume_val * GALLONS_TO_LITERS
     daily_removed_pci = activity_pci_per_l * volume_l * (efficiency_percent / 100.0)
-    return daily_removed_pci * days
+    return (daily_removed_pci * days) / CALIBRATION_CONSTANT
+
+
+def pci_per_gram_colour(value):
+    """Legend colour for a pCi/g reading: red >2000, yellow 1000-2000, green <1000."""
+    if value > 2000:
+        return RED_RESULT
+    elif value > 1000:
+        return YELLOW_RESULT
+    return GREEN_RESULT
 
 
 def safe_float(text_ctrl, default=0.0):
@@ -530,18 +554,57 @@ class UserInputPanel(wx.Panel):
 # Custom-drawn growth curve control used on the Waste Disposal screen
 # ---------------------------------------------------------------------------
 class GrowthCurvePanel(wx.Panel):
-    """Plots % of Pb-210 equilibrium vs. years (0-100), with a marker at the
-    currently selected number of years."""
+    """Plots % of Pb-210 equilibrium vs. years (0-100).
+
+    Stays blank until run() is called (i.e. until Calculate is pressed).
+    Once run, the curve animates in year-by-year, and each plotted point is
+    colored by its own pCi/g reading at that point in time (green/yellow/red
+    per the same thresholds as the legend) rather than one fixed color -
+    matching how the reference screenshots show curves that start green and
+    can shade into yellow/red as the years (and activity) build up.
+    """
+
+    ANIMATION_STEP_YEARS = 2   # years revealed per timer tick
+    ANIMATION_INTERVAL_MS = 15
 
     def __init__(self, parent):
         super().__init__(parent, size=(340, 230))
         self.SetBackgroundColour(wx.WHITE)
         self.selected_years = 100
+        self.total_max_pci = None      # None = nothing calculated yet -> blank
+        self.volume_cm3 = None
+        self._revealed_up_to = 0
+        self.timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.on_timer)
         self.Bind(wx.EVT_PAINT, self.on_paint)
 
-    def set_selected_years(self, years):
-        self.selected_years = max(1, min(100, years))
+    def run(self, total_max_pci, volume_cm3, selected_years):
+        """Kick off (or restart) the animated draw for a fresh Calculate press."""
+        self.total_max_pci = total_max_pci
+        self.volume_cm3 = volume_cm3
+        self.selected_years = max(1, min(100, selected_years))
+        self._revealed_up_to = 0
+        self.timer.Stop()
+        self.timer.Start(self.ANIMATION_INTERVAL_MS)
+
+    def clear(self):
+        self.timer.Stop()
+        self.total_max_pci = None
+        self.volume_cm3 = None
+        self._revealed_up_to = 0
         self.Refresh()
+
+    def on_timer(self, event):
+        self._revealed_up_to = min(100, self._revealed_up_to + self.ANIMATION_STEP_YEARS)
+        self.Refresh()
+        if self._revealed_up_to >= 100:
+            self.timer.Stop()
+
+    def _pci_per_gram_at(self, years):
+        if not self.volume_cm3:
+            return 0.0
+        total_now = self.total_max_pci * pb210_growth_fraction(years)
+        return total_now / self.volume_cm3
 
     def on_paint(self, event):
         dc = wx.AutoBufferedPaintDC(self)
@@ -582,11 +645,20 @@ class GrowthCurvePanel(wx.Panel):
             (margin_l, margin_t),
         ])
 
-        # the growth curve, drawn as small dots (matches reference image style)
-        gc.SetBrush(wx.Brush(wx.Colour(0, 200, 0)))
+        if self.total_max_pci is None:
+            dc.SetFont(wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_ITALIC, wx.FONTWEIGHT_NORMAL))
+            dc.DrawText("Press Calculate to generate the growth curve",
+                        margin_l + 15, margin_t + plot_h / 2 - 8)
+            return
+
+        # the growth curve, drawn as small dots colored by their own pCi/g
+        # reading (matches how the reference curves shade from green into
+        # yellow/red as activity builds up over the years)
         gc.SetPen(wx.TRANSPARENT_PEN)
-        for yr in range(0, 101):
+        for yr in range(0, self._revealed_up_to + 1):
             pct = pb210_growth_fraction(yr) * 100.0
+            colour = pci_per_gram_colour(self._pci_per_gram_at(yr))
+            gc.SetBrush(wx.Brush(colour))
             x, y = px(yr), py(pct)
             gc.DrawEllipse(x - 1.5, y - 1.5, 3, 3)
 
@@ -697,7 +769,7 @@ class WasteDisposalPanel(wx.Panel):
         self.btn_exit.Bind(wx.EVT_BUTTON, lambda e: frame.Close())
 
         self.SetSizer(outer)
-        self.on_calculate(None)
+        self._show_placeholder_readouts()
 
     def _legend_item(self, text, colour):
         row = wx.BoxSizer(wx.HORIZONTAL)
@@ -706,6 +778,14 @@ class WasteDisposalPanel(wx.Panel):
         row.Add(swatch, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
         row.Add(wx.StaticText(self, label=text), 0, wx.ALIGN_CENTER_VERTICAL)
         return row
+
+    def _show_placeholder_readouts(self):
+        """Blank state before Calculate has been pressed."""
+        self.total_pb210.SetValue("")
+        self.pci_per_g.SetValue("")
+        self.pci_per_g.SetBackgroundColour(wx.Colour(230, 230, 230))
+        self.pci_per_g.Refresh()
+        self.graph.clear()
 
     def on_back(self, event):
         self.frame.show_panel(self.frame.user_input_panel)
@@ -732,17 +812,11 @@ class WasteDisposalPanel(wx.Panel):
 
         self.total_pb210.SetValue(f"{total_now:.2e}")
         self.pci_per_g.SetValue(f"{pci_per_g_wet:.2f}")
-
-        if pci_per_g_wet > 2000:
-            colour = RED_RESULT
-        elif pci_per_g_wet > 1000:
-            colour = YELLOW_RESULT
-        else:
-            colour = GREEN_RESULT
-        self.pci_per_g.SetBackgroundColour(colour)
+        self.pci_per_g.SetBackgroundColour(pci_per_gram_colour(pci_per_g_wet))
         self.pci_per_g.Refresh()
 
-        self.graph.set_selected_years(years)
+        # curve only appears (and animates in) once Calculate is pressed
+        self.graph.run(total_max, volume_cm3, years)
 
 
 # ---------------------------------------------------------------------------
