@@ -570,12 +570,13 @@ class GrowthCurvePanel(wx.Panel):
     def __init__(self, parent):
         super().__init__(parent, size=(340, 230))
         self.SetBackgroundColour(wx.WHITE)
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)  # required by wx.AutoBufferedPaintDC
         self.selected_years = 100
         self.total_max_pci = None      # None = nothing calculated yet -> blank
         self.volume_cm3 = None
         self._revealed_up_to = 0
         self.timer = wx.Timer(self)
-        self.Bind(wx.EVT_TIMER, self.on_timer)
+        self.Bind(wx.EVT_TIMER, self.on_timer, self.timer)
         self.Bind(wx.EVT_PAINT, self.on_paint)
 
     def run(self, total_max_pci, volume_cm3, selected_years):
@@ -624,18 +625,29 @@ class GrowthCurvePanel(wx.Panel):
         def py(percent):
             return margin_t + plot_h - (percent / 100.0) * plot_h
 
+        # NOTE: everything below draws through `gc` (GraphicsContext), never
+        # through `dc` directly. Mixing dc.DrawText()/dc.SetFont() calls in
+        # with gc drawing on the same buffered DC is a known source of
+        # "nothing renders" bugs in wxPython - once a GraphicsContext wraps
+        # the DC, raw DC calls can get silently dropped or drawn in the
+        # wrong order depending on the platform's backend (Cairo/GDI+/
+        # Direct2D). Keeping it all on gc avoids that entirely.
+        label_font = gc.CreateFont(
+            wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL),
+            wx.BLACK,
+        )
+        gc.SetFont(label_font)
+
         # gridlines + axis labels
         gc.SetPen(wx.Pen(wx.Colour(180, 180, 180), 1, wx.PENSTYLE_DOT))
-        dc.SetTextForeground(wx.BLACK)
-        dc.SetFont(wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
         for pct in (0, 25, 50, 75, 100):
             y = py(pct)
             gc.StrokeLine(margin_l, y, margin_l + plot_w, y)
-            dc.DrawText(str(pct), 5, y - 6)
+            gc.DrawText(str(pct), 5, y - 6)
         for yr in (0, 25, 50, 75, 100):
             x = px(yr)
             gc.StrokeLine(x, margin_t, x, margin_t + plot_h)
-            dc.DrawText(str(yr), x - 8, margin_t + plot_h + 5)
+            gc.DrawText(str(yr), x - 8, margin_t + plot_h + 5)
 
         # axis border
         gc.SetPen(wx.Pen(wx.BLACK, 1))
@@ -646,8 +658,12 @@ class GrowthCurvePanel(wx.Panel):
         ])
 
         if self.total_max_pci is None:
-            dc.SetFont(wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_ITALIC, wx.FONTWEIGHT_NORMAL))
-            dc.DrawText("Press Calculate to generate the growth curve",
+            italic_font = gc.CreateFont(
+                wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_ITALIC, wx.FONTWEIGHT_NORMAL),
+                wx.Colour(90, 90, 90),
+            )
+            gc.SetFont(italic_font)
+            gc.DrawText("Press Calculate to generate the growth curve",
                         margin_l + 15, margin_t + plot_h / 2 - 8)
             return
 
