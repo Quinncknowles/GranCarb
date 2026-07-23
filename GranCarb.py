@@ -976,8 +976,8 @@ class XProtocolPanel(wx.Panel):
 
 
 # ---------------------------------------------------------------------------
-# Stub screens (layout not yet provided - navigation works, content is a
-# placeholder so the app doesn't lose any entered values when you visit them)
+# Stub screens (navigation works, content is a
+# placeholder so the app doesn't lose any entered values)
 # ---------------------------------------------------------------------------
 class StubPanel(wx.Panel):
     def __init__(self, parent, frame, title):
