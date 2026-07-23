@@ -45,10 +45,28 @@ secular equilibrium), not something invented arbitrarily.
 import math
 import webbrowser
 import os
+import sys
 import wx.html2
 import wx
 
 
+# ------------------------------------------
+#PyInstaller references
+#-------------------------------------------
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except AttributeError:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+
+    return os.path.join(base_path, relative_path)
+    
+# Centralized Application Resources / Assets
+LOGO_PNG_PATH   = resource_path(os.path.join("src", "MooseParty.png"))
+APP_ICON_PATH   = resource_path(os.path.join("src", "MooseParty.ico"))
+README_MD_PATH  = resource_path("README.md")
+    
+    
 # ---------------------------------------------------------------------------
 # Shared visual constants
 # ---------------------------------------------------------------------------
@@ -1460,7 +1478,7 @@ class StubPanel(wx.Panel):
 # Logo Screen - displays logo before continuing to the input page
 # ---------------------------------------------------------------------------
 class LogoScreen(wx.Panel):
-    def __init__(self, parent, frame, image_path="src/MooseParty.png"):
+    def __init__(self, parent, frame, image_path=LOGO_PNG_PATH):
         super().__init__(parent)
         self.frame = frame
         self.SetBackgroundColour(wx.Colour(255, 255, 255))
@@ -1498,7 +1516,7 @@ class LogoScreen(wx.Panel):
         self.frame.show_panel(self.frame.user_input_panel)
 
     def _on_show_readme(self, event):
-        dlg = ReadmeDialog(self)
+        dlg = ReadmeDialog(self, readme_path=README_MD_PATH)
         dlg.ShowModal()
         dlg.Destroy()
 
@@ -1506,7 +1524,7 @@ class LogoScreen(wx.Panel):
 # README Screen - displays README.md 
 # ---------------------------------------------------------------------------
 class ReadmeDialog(wx.Dialog):
-    def __init__(self, parent, readme_path="README.md"):
+    def __init__(self, parent, readme_path=README_MD_PATH):
         super().__init__(parent, title="README Documentation", size=(600, 500),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         
@@ -1560,13 +1578,16 @@ class ReadmeDialog(wx.Dialog):
 class MainFrame(wx.Frame):
     def __init__(self):
         super().__init__(None, title="GAC Radon Removal Calculator", size=(560, 680))
-
+        
+        if os.path.exists(APP_ICON_PATH):
+            icon = wx.Icon(APP_ICON_PATH, wx.BITMAP_TYPE_ICO)
+            self.SetIcon(icon)
         self.container = wx.Panel(self)
         self.container_sizer = wx.BoxSizer(wx.VERTICAL)
         self.container.SetSizer(self.container_sizer)
 
         # Instantiate panels
-        self.logo_panel = LogoScreen(self.container, self, "src/MooseParty.png")
+        self.logo_panel = LogoScreen(self.container, self, LOGO_PNG_PATH)
         self.user_input_panel = UserInputPanel(self.container, self)
         self.waste_disposal_panel = WasteDisposalPanel(self.container, self)
         self.xprotocol_panel = XProtocolPanel(self.container, self)
