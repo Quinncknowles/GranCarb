@@ -11,6 +11,15 @@
 - Keep the codebase readable and open so radon mitigation professionals, regulators, or hobbyist reviewers can inspect exactly how a result was produced.
 - Package as a standalone Windows executable via PyInstaller so the tool doesn't require a Python install to run.
 
+## Current State
+
+- User input screen        (main entry screen)
+- Waste disposal screen    (Pb-210 growth curve + pCi/g results)
+- X-Protocol screen        (1-year GAC use, user-defined volume/density)
+- Cancer risks screen      (stub - Non-Functional)
+- Gamma radiation screen   (stub - Non-Functional)
+- Bq <-> Ci calculator     (popup dialog - Non-Functional)
+
 ## Modeling Assumptions and Current Methodology
 
 The original Carbdose source code and technical specification are not currently available. Where the underlying methodology could be inferred from established nuclear physics or the original application's behavior, those models have been reproduced. Where the original implementation could not be determined, reasonable engineering approximations or empirical calibration have been used and are documented below.
@@ -140,8 +149,14 @@ The following portions of the model should be reviewed with a subject matter exp
 - The original **Carbdose** application and its underlying methodology, developed for the EPA in the 1990s to support radon mitigation via granular activated carbon (GAC) filtration.
 - Built with [wxPython](https://www.wxpython.org/).
 - Packaged with [PyInstaller](https://pyinstaller.org/).
+- Markdown and Browser python libraries
 - icon used with permission of The Moose Party.
 
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
+
+## Notice
+Copyright 2026 Quinn Knowles
+
+Licensed under the Apache License, Version 2.0
