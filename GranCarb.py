@@ -6,16 +6,21 @@ Screens:
   - User input screen        (main entry screen)
   - Waste disposal screen    (Pb-210 growth curve + pCi/g results)
   - X-Protocol screen        (1-year GAC use, user-defined volume/density)
-  - Cancer risks screen      (stub - layout not yet provided)
-  - Gamma radiation screen   (stub - layout not yet provided)
-  - Bq <-> Ci calculator     (popup dialog)
+  - Cancer risks screen      (stub - Non-Functional)
+  - Gamma radiation screen   (stub - Non-Functional)
+  - Bq <-> Ci calculator     (popup dialog - Non-Functional)
 
-Requires: pip install wxpython
-Run:      python3 gac_calculator_app.py
+Requires: pip install wxpython 
+Run:      python3 GranCarb.py
 
 ------------------------------------------------------------------------
-PHYSICS / MODEL NOTES (read this before trusting the numbers)
+PHYSICS / MODEL NOTES 
 ------------------------------------------------------------------------
+None of the calculations currently included in this model have been checked
+or approved by a subject matter expert. The application does its best to 
+model its formula on known decay chain when possible. The application is 
+designed to copy the results given by CARBDOSE, using similar formula.
+
 Rn-222 captured on GAC decays through a chain of very short-lived progeny
 (Po-218, Pb-214, Bi-214, Po-214 - all well under an hour half-life) down
 to Pb-210, which is effectively long-lived (half-life = 22.3 years) by
@@ -26,9 +31,6 @@ Pb-210 itself, which follows the standard buildup curve:
     fraction_of_equilibrium(t) = 1 - exp(-lambda_Pb210 * t)
     lambda_Pb210 = ln(2) / 22.3 (per year)
 
-This matches the shape of the reference chart (crosses 50% around the
-22-25 year mark = the Pb-210 half-life, and is ~95%+ by 100 years).
-
 Pb-210 itself decays to Bi-210 (t1/2 = 5.01 days) then Po-210
 (t1/2 = 138.4 days) then stable Pb-206. Both of those half-lives are
 tiny next to a year, so within about a year of Pb-210 being present,
@@ -37,20 +39,34 @@ activities become essentially equal to the Pb-210 activity. That's why
 "Growth of Pb-210 plus Bi-210 and Po-210 progeny" is modeled here as
 3x the Pb-210-only activity (one full chain of three progeny in
 secular equilibrium), not something invented arbitrarily.
-
-The one placeholder assumption is the *volume* used for the "5 inch
-layer at top of column" case on the Waste Disposal screen. I don't
-have your actual column geometry, so I approximated the top-5-inch
-layer as a fraction of a 2 cu ft column (see LAYER_VOLUME_FRACTION
-below). Replace that constant once you have the real column dimensions.
 ------------------------------------------------------------------------
 """
 
 import math
 import webbrowser
-
+import os
+import sys
+import wx.html2
 import wx
 
+
+# ------------------------------------------
+#PyInstaller references
+#-------------------------------------------
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except AttributeError:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+
+    return os.path.join(base_path, relative_path)
+    
+# Centralized Application Resources / Assets
+LOGO_PNG_PATH   = resource_path(os.path.join("src", "MooseParty.png"))
+APP_ICON_PATH   = resource_path(os.path.join("src", "MooseParty.ico"))
+README_MD_PATH  = resource_path("README.md")
+    
+    
 # ---------------------------------------------------------------------------
 # Shared visual constants
 # ---------------------------------------------------------------------------
@@ -75,17 +91,14 @@ LAYER_VOLUME_CM3 = TWO_CUFT_CM3 * LAYER_VOLUME_FRACTION
 PROGENY_MULTIPLIER = 3.0  # Pb-210 + Bi-210 + Po-210 at secular equilibrium
 
 # CALIBRATION_CONSTANT was fit against two known reference outputs from the
-# real Waste Disposal screen, both at "Selected time = 100 years" and the
+# CARBDOSE Waste Disposal screen, both at "Selected time = 100 years" and the
 # "5 inch layer" method:
 #   activity=900,    12 gal, eff=95%, 30 days -> Total Pb-210 = 2.06E+05 pCi, 31.99 pCi/g
 #   activity=120000, 12 gal, eff=90%, 30 days -> Total Pb-210 = 2.60E+07 pCi, 4040.70 pCi/g
 # A plain "activity * volume * efficiency * days" formula overshoots both of
 # those by a consistent ~5.4x, so this constant divides that out. It is a
-# curve fit to match your two examples, NOT derived from a first-principles
-# radon/GAC mass-balance model (I don't have your source formula/spec for
-# how "days operating" turns into captured activity). If you can share more
-# known input/output pairs, or the underlying formula, I can replace this
-# with something exact instead of calibrated.
+# curve fit two examples, NOT derived from a first-principles
+# radon/GAC mass-balance model.
 CALIBRATION_CONSTANT = 5.4056
 
 
@@ -146,22 +159,8 @@ M3_TO_LITERS = 1000.0       # 1 cubic meter = 1000 liters
 class BqCiDialog(wx.Frame):
     """Becquerel <---> Curie calculator.
 
-    Behaves as a normal four-function calculator on the yellow display.
-    The Becquerel/Curie radio buttons pick which unit the number on
-    display currently represents; switching the radio button converts the
-    displayed value on the spot, using whatever prefixes are selected in
-    the "Bq Prefix" / "Ci Prefix" dropdowns (e.g. k, m, u...).
-
-    The "Auto xBq/m3 <-> xCi/l" checkbox switches the conversion from a
-    plain activity conversion (Bq <-> Ci) to an activity-*concentration*
-    conversion (Bq/m3 <-> Ci/l), which brings in the extra factor of 1000
-    for the m3-to-liter volume change.
-
-    NOTE: this is a wx.Frame, not a wx.Dialog - wx.Dialog does not support
-    SetMenuBar on most platforms (menu bars are a frame-only feature), and
-    the reference screenshot has a real File/Options/Help menu bar. It's
-    opened non-modally (.Show(), not .ShowModal()) so the user input screen
-    stays interactive behind it, same as a real desktop calculator.
+    If I'm honest, I have no idea what the original version of this was meant to do.
+    does it just convert values? something else?
     """
 
     def __init__(self, parent):
@@ -562,9 +561,12 @@ class GrowthCurvePanel(wx.Panel):
     per the same thresholds as the legend) rather than one fixed color -
     matching how the reference screenshots show curves that start green and
     can shade into yellow/red as the years (and activity) build up.
+    
+    TODO:
+    - Adjust graph x-axis to end at the input number
     """
 
-    ANIMATION_STEP_YEARS = 2   # years revealed per timer tick
+    ANIMATION_STEP_YEARS = 1   # years revealed per timer tick
     ANIMATION_INTERVAL_MS = 15
 
     def __init__(self, parent):
@@ -625,13 +627,6 @@ class GrowthCurvePanel(wx.Panel):
         def py(percent):
             return margin_t + plot_h - (percent / 100.0) * plot_h
 
-        # NOTE: everything below draws through `gc` (GraphicsContext), never
-        # through `dc` directly. Mixing dc.DrawText()/dc.SetFont() calls in
-        # with gc drawing on the same buffered DC is a known source of
-        # "nothing renders" bugs in wxPython - once a GraphicsContext wraps
-        # the DC, raw DC calls can get silently dropped or drawn in the
-        # wrong order depending on the platform's backend (Cairo/GDI+/
-        # Direct2D). Keeping it all on gc avoids that entirely.
         label_font = gc.CreateFont(
             wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL),
             wx.BLACK,
@@ -728,32 +723,42 @@ class WasteDisposalPanel(wx.Panel):
         )
         results_row = wx.BoxSizer(wx.HORIZONTAL)
 
-        # legend
+        # Legend
         legend_sizer = wx.BoxSizer(wx.VERTICAL)
         legend_sizer.Add(self._legend_item("> 2000 pCi/gram", RED_RESULT), 0, wx.BOTTOM, 4)
         legend_sizer.Add(self._legend_item("<= 2000 pCi/gram", YELLOW_RESULT), 0, wx.BOTTOM, 4)
         legend_sizer.Add(self._legend_item("< 1000 pCi/gram", GREEN_RESULT), 0, wx.BOTTOM, 4)
         results_row.Add(legend_sizer, 0, wx.ALL, 8)
 
-        # graph
+        # Graph
         self.graph = GrowthCurvePanel(self)
         results_row.Add(self.graph, 1, wx.EXPAND | wx.ALL, 8)
 
         results_box.Add(results_row, 0, wx.EXPAND)
 
-        # numeric readouts
+        # Numeric readouts grid
         readout_grid = wx.FlexGridSizer(cols=3, vgap=8, hgap=10)
+        
+        # Row 1: pCi/g Pb-210
         readout_grid.Add(wx.StaticText(self, label="pCi/g Pb-210"), 0, wx.ALIGN_CENTER_VERTICAL)
         self.pci_per_g = wx.TextCtrl(self, style=wx.TE_READONLY | wx.TE_CENTER)
         self.pci_per_g.SetBackgroundColour(GREEN_RESULT)
         readout_grid.Add(self.pci_per_g, 0, wx.EXPAND)
         readout_grid.Add(wx.StaticText(self, label="Wet Weight (density 1.0)"), 0, wx.ALIGN_CENTER_VERTICAL)
 
+        # Row 2: Total Pb-210
         readout_grid.Add(wx.StaticText(self, label="Total Pb-210"), 0, wx.ALIGN_CENTER_VERTICAL)
         self.total_pb210 = wx.TextCtrl(self, style=wx.TE_READONLY | wx.TE_CENTER)
         self.total_pb210.SetBackgroundColour(YELLOW)
         readout_grid.Add(self.total_pb210, 0, wx.EXPAND)
         readout_grid.Add(wx.StaticText(self, label="pCi"), 0, wx.ALIGN_CENTER_VERTICAL)
+
+        # Row 3: Red Zone Threshold Time (Bottom Right Readout)
+        readout_grid.Add(wx.StaticText(self, label="Red zone entry (>2000 pCi/g)"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.txt_red_zone_time = wx.TextCtrl(self, style=wx.TE_READONLY | wx.TE_CENTER)
+        self.txt_red_zone_time.SetBackgroundColour(RED_RESULT)
+        readout_grid.Add(self.txt_red_zone_time, 0, wx.EXPAND)
+        readout_grid.Add(wx.StaticText(self, label="Yr / Mo"), 0, wx.ALIGN_CENTER_VERTICAL)
 
         results_box.Add(readout_grid, 0, wx.ALL, 10)
 
@@ -799,9 +804,33 @@ class WasteDisposalPanel(wx.Panel):
         """Blank state before Calculate has been pressed."""
         self.total_pb210.SetValue("")
         self.pci_per_g.SetValue("")
+        self.txt_red_zone_time.SetValue("")
         self.pci_per_g.SetBackgroundColour(wx.Colour(230, 230, 230))
         self.pci_per_g.Refresh()
         self.graph.clear()
+
+    def _calculate_red_zone_time(self, total_max_pci, volume_cm3):
+        """Finds the month/year step where pCi/g exceeds 2000 pCi/g."""
+        if not volume_cm3 or total_max_pci <= 0:
+            return "N/A"
+
+        # Check in month intervals up to 100 years
+        for month in range(1, 100 * 12 + 1):
+            yr = month / 12.0
+            total_now = total_max_pci * pb210_growth_fraction(yr)
+            pci_g = total_now / volume_cm3
+
+            if pci_g > 2000.0:
+                years_part = month // 12
+                months_part = month % 12
+                if years_part > 0 and months_part > 0:
+                    return f"{years_part} yrs, {months_part} mos"
+                elif years_part > 0:
+                    return f"{years_part} yrs"
+                else:
+                    return f"{months_part} mos"
+
+        return "> 100 yrs"
 
     def on_back(self, event):
         self.frame.show_panel(self.frame.user_input_panel)
@@ -831,7 +860,11 @@ class WasteDisposalPanel(wx.Panel):
         self.pci_per_g.SetBackgroundColour(pci_per_gram_colour(pci_per_g_wet))
         self.pci_per_g.Refresh()
 
-        # curve only appears (and animates in) once Calculate is pressed
+        # Calculate and display time to cross 2000 pCi/g threshold
+        red_zone_time = self._calculate_red_zone_time(total_max, volume_cm3)
+        self.txt_red_zone_time.SetValue(red_zone_time)
+
+        # Start animation
         self.graph.run(total_max, volume_cm3, years)
 
 
@@ -976,8 +1009,438 @@ class XProtocolPanel(wx.Panel):
 
 
 # ---------------------------------------------------------------------------
-# Stub screens (layout not yet provided - navigation works, content is a
-# placeholder so the app doesn't lose any entered values when you visit them)
+#  Gamma Radiation Screen - Tabs located below
+# ---------------------------------------------------------------------------
+class GammaRadiationPanel(wx.Panel):
+    def __init__(self, parent, frame):
+        super().__init__(parent)
+        self.frame = frame
+
+        panel_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # Notebook Setup
+        self.notebook = wx.Notebook(self)
+        
+        # Instantiate actual tabs
+        self.tab_volume = VolumeSourceTab(self.notebook)
+        self.tab_point = PointSourceTab(self.notebook)
+        self.tab_safe_dist = SafeDistanceTab(self.notebook)
+
+        self.notebook.AddPage(self.tab_volume, "Volume source")
+        self.notebook.AddPage(self.tab_point, "Point source")
+        self.notebook.AddPage(self.tab_safe_dist, '"Safe distance"')
+
+        panel_sizer.Add(self.notebook, 1, wx.EXPAND | wx.ALL, 5)
+
+        # Bottom Navigation Bar
+        nav_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        btn_user_input = wx.Button(self, label="User input")
+        btn_user_input.Bind(wx.EVT_BUTTON, lambda e: frame.show_panel(frame.user_input_panel))
+        
+        btn_cancer_risks = wx.Button(self, label="Cancer risks")
+        btn_cancer_risks.Bind(wx.EVT_BUTTON, lambda e: frame.show_panel(frame.cancer_risk_panel))
+
+        btn_waste_disposal = wx.Button(self, label="Waste disposal")
+        btn_waste_disposal.Bind(wx.EVT_BUTTON, lambda e: frame.show_panel(frame.waste_disposal_panel))
+
+        btn_exit = wx.Button(self, label="Exit")
+        btn_exit.Bind(wx.EVT_BUTTON, lambda e: frame.Close())
+
+        nav_sizer.Add(btn_user_input, 1, wx.RIGHT, 5)
+        nav_sizer.Add(btn_cancer_risks, 1, wx.RIGHT, 5)
+        nav_sizer.Add(btn_waste_disposal, 1, wx.RIGHT, 5)
+        nav_sizer.Add(btn_exit, 1, wx.LEFT, 5)
+
+        panel_sizer.Add(nav_sizer, 0, wx.EXPAND | wx.ALL, 10)
+
+        self.SetSizer(panel_sizer)
+        
+
+# ---------------------------------------------------------------------------
+#  Volume Source tab - Gamma Radiation Screen
+# ---------------------------------------------------------------------------
+class VolumeSourceTab(wx.Panel):
+    """'Volume source' tab matching screenshot reference."""
+    def __init__(self, parent):
+        super().__init__(parent)
+
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        main_sizer.AddSpacer(15)
+
+        # 1. Header Title
+        title_lbl = wx.StaticText(self, label="Calculated exposure from a GAC column", style=wx.ALIGN_CENTER)
+        f_title = title_lbl.GetFont()
+        f_title.SetWeight(wx.FONTWEIGHT_BOLD)
+        title_lbl.SetFont(f_title)
+        main_sizer.Add(title_lbl, 0, wx.ALIGN_CENTER | wx.BOTTOM, 15)
+
+        # 2. Exposure Rate Box (Inset Panel)
+        self.box_panel = wx.Panel(self)
+        self.box_panel.SetBackgroundColour(wx.Colour(210, 210, 210))  # Muted grey box background
+        box_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # Dynamic calculation display string
+        self.calc_text = (
+            "The estimated exposure rate 1 meter from the GAC filter wall for a "
+            "volume distributed source of 6.94E+07 pCi of radon in equilibrium "
+            "with its progeny is: 7.28E-02 mR/hr"
+        )
+        self.lbl_calc = wx.StaticText(self.box_panel, label=self.calc_text)
+        self.lbl_calc.Wrap(450)
+        box_sizer.Add(self.lbl_calc, 1, wx.ALL | wx.EXPAND, 12)
+        self.box_panel.SetSizer(box_sizer)
+
+        main_sizer.Add(self.box_panel, 0, wx.LEFT | wx.RIGHT | wx.EXPAND, 25)
+        main_sizer.AddSpacer(25)
+
+        # 3. Instruction Label
+        instr_lbl = wx.StaticText(
+            self, 
+            label="To estimate the probable exposure at other distances, enter the\ndesired distance from the tank wall (greater than 36 inches)"
+        )
+        main_sizer.Add(instr_lbl, 0, wx.LEFT | wx.RIGHT, 25)
+        main_sizer.AddSpacer(10)
+
+        # 4. Input Field
+        self.txt_distance = wx.TextCtrl(self, value=">36 inches", size=(140, 25), style=wx.TE_CENTER)
+        main_sizer.Add(self.txt_distance, 0, wx.ALIGN_CENTER)
+
+        self.SetSizer(main_sizer)
+
+    def update_values(self, radon_pci="6.94E+07", exposure_rate="7.28E-02"):
+        """Call this method to dynamically recalculate the displayed text."""
+        updated_text = (
+            f"The estimated exposure rate 1 meter from the GAC filter wall for a "
+            f"volume distributed source of {radon_pci} pCi of radon in equilibrium "
+            f"with its progeny is: {exposure_rate} mR/hr"
+        )
+        self.lbl_calc.SetLabel(updated_text)
+        self.lbl_calc.Wrap(450)
+        self.Layout()
+
+
+
+# ---------------------------------------------------------------------------
+#  Point Source tab - Gamma Radiation Screen
+# ---------------------------------------------------------------------------
+class PointSourceTab(wx.Panel):
+    """'Point source' tab matching screenshot reference."""
+    def __init__(self, parent):
+        super().__init__(parent)
+
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        main_sizer.AddSpacer(15)
+
+        # 1. Header Title
+        title_lbl = wx.StaticText(self, label="Calculated exposure from an equivalent point source", style=wx.ALIGN_CENTER)
+        f_title = title_lbl.GetFont()
+        f_title.SetWeight(wx.FONTWEIGHT_BOLD)
+        title_lbl.SetFont(f_title)
+        main_sizer.Add(title_lbl, 0, wx.ALIGN_CENTER | wx.BOTTOM, 15)
+
+        # 2. Exposure Rate Box (Inset Panel)
+        self.box_panel = wx.Panel(self)
+        self.box_panel.SetBackgroundColour(wx.Colour(210, 210, 210))  # Muted grey box background
+        box_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        self.calc_text = (
+            "The estimated exposure rate 1 meter from the GAC filter center line "
+            "for a point source of 6.94E+07pCi of radon in equilibrium with its "
+            "progeny is: 8.54E-02 mR/hr"
+        )
+        self.lbl_calc = wx.StaticText(self.box_panel, label=self.calc_text)
+        self.lbl_calc.Wrap(450)
+        box_sizer.Add(self.lbl_calc, 1, wx.ALL | wx.EXPAND, 12)
+        self.box_panel.SetSizer(box_sizer)
+
+        main_sizer.Add(self.box_panel, 0, wx.LEFT | wx.RIGHT | wx.EXPAND, 25)
+        main_sizer.AddSpacer(25)
+
+        # 3. Instruction Label
+        instr_lbl = wx.StaticText(
+            self, 
+            label="To estimate the probable point source exposure at other distances,\nenter the desired distance from the tank center line (in inches)"
+        )
+        main_sizer.Add(instr_lbl, 0, wx.LEFT | wx.RIGHT, 25)
+        main_sizer.AddSpacer(10)
+
+        # 4. Input Field
+        self.txt_distance = wx.TextCtrl(self, size=(140, 25), style=wx.TE_CENTER)
+        main_sizer.Add(self.txt_distance, 0, wx.ALIGN_CENTER)
+
+        self.SetSizer(main_sizer)
+
+    def update_values(self, radon_pci="6.94E+07", exposure_rate="8.54E-02"):
+        """Call this method to dynamically recalculate the displayed text."""
+        updated_text = (
+            f"The estimated exposure rate 1 meter from the GAC filter center line "
+            f"for a point source of {radon_pci}pCi of radon in equilibrium with its "
+            f"progeny is: {exposure_rate} mR/hr"
+        )
+        self.lbl_calc.SetLabel(updated_text)
+        self.lbl_calc.Wrap(450)
+        self.Layout()
+        
+                
+# ---------------------------------------------------------------------------
+#  Safe Distance tab - Gamma Radiation Screen
+# ---------------------------------------------------------------------------
+class SafeDistanceTab(wx.Panel):
+    """The '"Safe distance"' tab content based on the reference layout."""
+    def __init__(self, parent):
+        super().__init__(parent)
+
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # -------------------------------------------------------------------
+        # Upper Group Box: "Distance considered to have acceptably small risk"
+        # -------------------------------------------------------------------
+        box = wx.StaticBox(self, label=" Distance considered to have acceptably small risk ")
+        box_sizer = wx.StaticBoxSizer(box, wx.VERTICAL)
+
+        # Main Guideline Text (Bolded like the reference screenshot)
+        guideline_text = (
+            "Current residential exposure limit guideline based on Carbdose standard of "
+            "100 mrem per year for individuals in the general public.  "
+            "Distances from tank wall greater than 57.6 inches have probable doses "
+            "less than 0.034 mR/hr.  Calculated as a maximum above background for an "
+            "8 hr/day exposure, 365 days per year."
+        )
+        lbl_guideline = wx.StaticText(self, label=guideline_text)
+        f_bold = lbl_guideline.GetFont()
+        f_bold.SetWeight(wx.FONTWEIGHT_BOLD)
+        lbl_guideline.SetFont(f_bold)
+        lbl_guideline.Wrap(480)  # Wrap to fit inside the panel nicely
+
+        box_sizer.Add(lbl_guideline, 1, wx.ALL | wx.EXPAND, 10)
+        main_sizer.Add(box_sizer, 0, wx.ALL | wx.EXPAND, 15)
+
+        # Spacer
+        main_sizer.AddSpacer(20)
+
+        # -------------------------------------------------------------------
+        # Lower Note Section
+        # -------------------------------------------------------------------
+        note_text = (
+            "Note text"
+        )
+        lbl_note = wx.StaticText(self, label=note_text)
+        lbl_note.Wrap(480)
+
+        main_sizer.Add(lbl_note, 0, wx.LEFT | wx.RIGHT | wx.EXPAND, 20)
+
+        self.SetSizer(main_sizer)        
+        
+
+# ---------------------------------------------------------------------------
+#  Cancer Risk Screen - Tabs located below
+# ---------------------------------------------------------------------------
+class CancerRiskPanel(wx.Panel):
+    """Main Cancer Risk Screen matching screenshot layouts."""
+    def __init__(self, parent, frame):
+        super().__init__(parent)
+        self.frame = frame
+
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # -------------------------------------------------------------------
+        # 1. Top Section: "Choose a cancer risk to present" Group Box
+        # -------------------------------------------------------------------
+        top_box = wx.StaticBox(self, label=" Choose a cancer risk to present ")
+        top_sizer = wx.StaticBoxSizer(top_box, wx.HORIZONTAL)
+
+        # Left Column: Radio Options
+        radio_sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        self.rdo_unit = wx.RadioButton(self, label="Unit cancer risk for radon in water", style=wx.RB_GROUP)
+        self.rdo_300 = wx.RadioButton(self, label="300 pCi/l MCL water radon cancer risk")
+        self.rdo_4000 = wx.RadioButton(self, label="4000 pCi/l AMCL water radon cancer risk")
+        self.rdo_untreated = wx.RadioButton(self, label="Your untreated water radon cancer risk")
+        self.rdo_treated = wx.RadioButton(self, label="Your treated water radon cancer risk")
+
+        # Set bold blue text for the selected radio button (matching reference)
+        f_blue = self.rdo_unit.GetFont()
+        f_blue.SetWeight(wx.FONTWEIGHT_BOLD)
+        self.rdo_unit.SetFont(f_blue)
+        self.rdo_unit.SetForegroundColour(wx.Colour(0, 0, 150))
+
+        radio_sizer.Add(self.rdo_unit, 0, wx.BOTTOM, 2)
+        radio_sizer.Add(self.rdo_300, 0, wx.BOTTOM, 2)
+        radio_sizer.Add(self.rdo_4000, 0, wx.BOTTOM, 2)
+        radio_sizer.Add(self.rdo_untreated, 0, wx.BOTTOM, 2)
+        radio_sizer.Add(self.rdo_treated, 0, wx.BOTTOM, 2)
+
+        top_sizer.Add(radio_sizer, 1, wx.ALL, 5)
+
+        # Right Column: Graph Action Buttons
+        btn_sizer = wx.BoxSizer(wx.VERTICAL)
+        btn_graph_cancers = wx.Button(self, label="Graph cancers", size=(120, -1))
+        btn_graph_percent = wx.Button(self, label="Graph percent", size=(120, -1))
+
+        btn_sizer.Add(btn_graph_cancers, 0, wx.BOTTOM, 10)
+        btn_sizer.Add(btn_graph_percent, 0)
+
+        top_sizer.Add(btn_sizer, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+        main_sizer.Add(top_sizer, 0, wx.ALL | wx.EXPAND, 8)
+
+        # -------------------------------------------------------------------
+        # 2. Middle Section: Notebook Tabs (General / Ever smoker / Never smoker)
+        # -------------------------------------------------------------------
+        self.notebook = wx.Notebook(self)
+
+        # Mock Data Sets matching screenshots
+        general_data = [
+            ("Inhalation of radon progeny due to radon released from water", "5.92E-07", "88%"),
+            ("Inhalation of radon gas released from water to indoor air", "6.30E-09", "1%"),
+            ("Ingestion of radon gas in direct tap water", "7.03E-08", "11%"),
+        ]
+        general_basis = (
+            "0.6 liters of water ingested, occupancy 75 years, 18 hours per day, 1-4 people, "
+            "with a water to air transfer ratio of 10,000 to 1. Mixture of ever and never smoking histories."
+        )
+
+        smoker_data = [
+            ("Inhalation of radon progeny due to radon released from water", "9.59E-07", "92%"),
+            ("Inhalation of radon gas released from water to indoor air", "6.30E-09", "1%"),
+            ("Ingestion of radon gas in direct tap water", "7.03E-08", "7%"),
+        ]
+        smoker_basis = (
+            "0.6 liters of water ingested, occupancy 75 years, 18 hours per day, 1-4 people, "
+            "with a water to air transfer ratio of 10,000 to 1. Ever smoker >= 100 cigarettes in lifetime."
+        )
+
+        never_smoker_data = [
+            ("Inhalation of radon progeny due to radon released from water", "2.25E-07", "76%"),
+            ("Inhalation of radon gas released from water to indoor air", "6.30E-09", "2%"),
+            ("Ingestion of radon gas in direct tap water", "7.03E-08", "22%"),
+        ]
+        never_smoker_basis = (
+            "0.6 liters of water ingested, occupancy 75 years, 18 hours per day, 1-4 people, "
+            "with a water to air transfer ratio of 10,000 to 1. Never smoker < 100 cigarettes in lifetime."
+        )
+
+        # Add Tab Pages
+        self.tab_general = PopulationTab(self.notebook, general_data, general_basis)
+        self.tab_smoker = PopulationTab(self.notebook, smoker_data, smoker_basis)
+        self.tab_never_smoker = PopulationTab(self.notebook, never_smoker_data, never_smoker_basis)
+
+        self.notebook.AddPage(self.tab_general, "General population")
+        self.notebook.AddPage(self.tab_smoker, "Ever smoker")
+        self.notebook.AddPage(self.tab_never_smoker, "Never smoker")
+
+        main_sizer.Add(self.notebook, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
+
+        # -------------------------------------------------------------------
+        # 3. Bottom Navigation Bar
+        # -------------------------------------------------------------------
+        nav_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        btn_user_input = wx.Button(self, label="User input")
+        btn_user_input.Bind(wx.EVT_BUTTON, lambda e: frame.show_panel(frame.user_input_panel))
+
+        btn_gamma = wx.Button(self, label="Gamma radiation")
+        btn_gamma.Bind(wx.EVT_BUTTON, lambda e: frame.show_panel(frame.gamma_radiation_panel))
+
+        btn_waste = wx.Button(self, label="Waste disposal")
+        btn_waste.Bind(wx.EVT_BUTTON, lambda e: frame.show_panel(frame.waste_disposal_panel))
+
+        btn_exit = wx.Button(self, label="Exit")
+        btn_exit.Bind(wx.EVT_BUTTON, lambda e: frame.Close())
+
+        nav_sizer.Add(btn_user_input, 1, wx.RIGHT, 5)
+        nav_sizer.Add(btn_gamma, 1, wx.RIGHT, 5)
+        nav_sizer.Add(btn_waste, 1, wx.RIGHT, 5)
+        nav_sizer.Add(btn_exit, 1, wx.LEFT, 5)
+
+        main_sizer.Add(nav_sizer, 0, wx.EXPAND | wx.ALL, 10)
+
+        self.SetSizer(main_sizer)        
+        
+
+# ---------------------------------------------------------------------------
+#  Population tab - Cancer Risk Screen
+# ---------------------------------------------------------------------------        
+class PopulationTab(wx.Panel):
+    """Reusable layout for General population, Ever smoker, and Never smoker tabs."""
+    def __init__(self, parent, data, basis_text):
+        super().__init__(parent)
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # 1. Title Header
+        title = wx.StaticText(self, label="Summary of Cancer Risk Estimates")
+        f_title = title.GetFont()
+        f_title.SetWeight(wx.FONTWEIGHT_BOLD)
+        title.SetFont(f_title)
+        sizer.Add(title, 0, wx.ALIGN_CENTER | wx.TOP | wx.BOTTOM, 8)
+
+        # 2. Main Risk Summary Box
+        box = wx.StaticBox(self)
+        box_sizer = wx.StaticBoxSizer(box, wx.VERTICAL)
+
+        # Inner FlexGrid for Tabular Data: [ Pathway Column | Separator Line | Risk Column | Percentage Column ]
+        grid = wx.FlexGridSizer(cols=4, vgap=8, hgap=10)
+        grid.AddGrowableCol(0, 1)  # Allow description column to take available space
+
+        # Headers
+        lbl_h1 = wx.StaticText(self, label="Exposure Pathway")
+        lbl_h2 = wx.StaticText(self, label="Lifetime Cancer Risk")
+        f_bold = lbl_h1.GetFont()
+        f_bold.SetWeight(wx.FONTWEIGHT_BOLD)
+        lbl_h1.SetFont(f_bold)
+        lbl_h2.SetFont(f_bold)
+
+        grid.Add(lbl_h1, 0, wx.LEFT, 5)
+        grid.Add(wx.StaticLine(self, style=wx.LI_VERTICAL), 0, wx.EXPAND)
+        grid.Add(lbl_h2, 0, wx.ALIGN_LEFT)
+        grid.AddSpacer(0)  # Header balance
+
+        # Data Rows
+        for pathway, risk, percent in data:
+            lbl_path = wx.StaticText(self, label=pathway)
+            lbl_risk = wx.StaticText(self, label=risk)
+            lbl_pct = wx.StaticText(self, label=f"({percent})")
+
+            lbl_path.Wrap(260)
+
+            grid.Add(lbl_path, 0, wx.LEFT, 5)
+            grid.Add(wx.StaticLine(self, style=wx.LI_VERTICAL), 0, wx.EXPAND)
+            grid.Add(lbl_risk, 0, wx.ALIGN_LEFT)
+            grid.Add(lbl_pct, 0, wx.ALIGN_RIGHT | wx.RIGHT, 10)
+
+        box_sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Horizontal Divider Line before "Sum"
+        box_sizer.Add(wx.StaticLine(self, style=wx.LI_HORIZONTAL), 0, wx.EXPAND | wx.TOP | wx.BOTTOM, 5)
+
+        # Summary / Total Row
+        total_grid = wx.FlexGridSizer(cols=4, vgap=5, hgap=10)
+        total_grid.AddGrowableCol(0, 1)
+
+        lbl_sum = wx.StaticText(self, label="Sum of all pathways")
+        lbl_sum_val = wx.StaticText(self, label=data[-1][1] if data else "0.00")
+        lbl_sum_pct = wx.StaticText(self, label="(100%)")
+
+        total_grid.Add(lbl_sum, 0, wx.ALIGN_RIGHT | wx.RIGHT, 15)
+        total_grid.Add(wx.StaticLine(self, style=wx.LI_VERTICAL), 0, wx.EXPAND)
+        total_grid.Add(lbl_sum_val, 0, wx.ALIGN_LEFT)
+        total_grid.Add(lbl_sum_pct, 0, wx.ALIGN_RIGHT | wx.RIGHT, 10)
+
+        box_sizer.Add(total_grid, 0, wx.EXPAND | wx.BOTTOM, 5)
+        sizer.Add(box_sizer, 1, wx.LEFT | wx.RIGHT | wx.EXPAND, 10)
+
+        # 3. Basis Text Footer
+        lbl_basis = wx.StaticText(self, label=f"Basis: {basis_text}")
+        lbl_basis.Wrap(480)
+        sizer.Add(lbl_basis, 0, wx.ALL | wx.EXPAND, 10)
+
+        self.SetSizer(sizer)
+        
+                
+# ---------------------------------------------------------------------------
+# Stub screens (navigation works, content is a
+# placeholder so the app doesn't lose any entered values)
 # ---------------------------------------------------------------------------
 class StubPanel(wx.Panel):
     def __init__(self, parent, frame, title):
@@ -996,8 +1459,7 @@ class StubPanel(wx.Panel):
 
         outer.Add(
             wx.StaticText(
-                self, label="Screen layout not yet provided - send a reference\n"
-                             "screenshot and I'll build this one out too.",
+                self, label="Screen layout not yet provided - send a reference\n",
                 style=wx.ALIGN_CENTER,
             ),
             0, wx.ALIGN_CENTER,
@@ -1011,33 +1473,139 @@ class StubPanel(wx.Panel):
         self.SetSizer(outer)
 
 
+
+# ---------------------------------------------------------------------------
+# Logo Screen - displays logo before continuing to the input page
+# ---------------------------------------------------------------------------
+class LogoScreen(wx.Panel):
+    def __init__(self, parent, frame, image_path=LOGO_PNG_PATH):
+        super().__init__(parent)
+        self.frame = frame
+        self.SetBackgroundColour(wx.Colour(255, 255, 255))
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.AddStretchSpacer(1)
+
+        # 1. Logo Display
+        if os.path.exists(image_path):
+            image = wx.Image(image_path, wx.BITMAP_TYPE_PNG)
+            bitmap = wx.StaticBitmap(self, bitmap=wx.Bitmap(image))
+            sizer.Add(bitmap, 0, wx.ALIGN_CENTER)
+        else:
+            placeholder = wx.StaticText(self, label="[ App Logo ]")
+            sizer.Add(placeholder, 0, wx.ALIGN_CENTER)
+
+        sizer.AddStretchSpacer(1)
+
+        # 2. Action Buttons (Horizontal Row)
+        btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        readme_btn = wx.Button(self, label="View README")
+        readme_btn.Bind(wx.EVT_BUTTON, self._on_show_readme)
+        btn_sizer.Add(readme_btn, 0, wx.RIGHT, 10)
+
+        continue_btn = wx.Button(self, label="Continue")
+        continue_btn.SetDefault()  # Highlights as primary action
+        continue_btn.Bind(wx.EVT_BUTTON, self._on_continue)
+        btn_sizer.Add(continue_btn, 0, wx.LEFT, 10)
+
+        sizer.Add(btn_sizer, 0, wx.ALIGN_CENTER | wx.BOTTOM, 40)
+        self.SetSizer(sizer)
+
+    def _on_continue(self, event):
+        self.frame.show_panel(self.frame.user_input_panel)
+
+    def _on_show_readme(self, event):
+        dlg = ReadmeDialog(self, readme_path=README_MD_PATH)
+        dlg.ShowModal()
+        dlg.Destroy()
+
+# ---------------------------------------------------------------------------
+# README Screen - displays README.md 
+# ---------------------------------------------------------------------------
+class ReadmeDialog(wx.Dialog):
+    def __init__(self, parent, readme_path=README_MD_PATH):
+        super().__init__(parent, title="README Documentation", size=(600, 500),
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        content = "README.md not found."
+        if os.path.exists(readme_path):
+            with open(readme_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+        try:
+            import markdown
+            html_body = markdown.markdown(content, extensions=['fenced_code', 'tables'])
+        except ImportError:
+            html_body = f"<pre>{content}</pre>"
+
+        styled_html = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+                       line-height: 1.5; padding: 15px; color: #24292e; background-color: #ffffff; }}
+                h1, h2, h3 {{ border-bottom: 1px solid #eaecef; padding-bottom: .3em; }}
+                code {{ background-color: #f6f8fa; padding: 0.2em 0.4em; border-radius: 3px; font-family: monospace; }}
+                pre {{ background-color: #f6f8fa; padding: 10px; border-radius: 6px; overflow: auto; }}
+                blockquote {{ border-left: 4px solid #dfe2e5; color: #6a737d; margin: 0; padding-left: 1em; }}
+                table {{ border-collapse: collapse; width: 100%; }}
+                th, td {{ border: 1px solid #dfe2e5; padding: 6px 13px; }}
+            </style>
+        </head>
+        <body>{html_body}</body>
+        </html>
+        """
+
+        # Scrollable WebView container
+        self.browser = wx.html2.WebView.New(self)
+        self.browser.SetPage(styled_html, "")
+        sizer.Add(self.browser, 1, wx.EXPAND | wx.ALL, 5)
+
+        # Close Button
+        close_btn = wx.Button(self, wx.ID_CLOSE, label="Close")
+        close_btn.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CLOSE))
+        sizer.Add(close_btn, 0, wx.ALIGN_RIGHT | wx.ALL, 10)
+
+        self.SetSizer(sizer)
+        self.Centre()
+
 # ---------------------------------------------------------------------------
 # Main frame - owns every panel and switches between them
 # ---------------------------------------------------------------------------
 class MainFrame(wx.Frame):
     def __init__(self):
         super().__init__(None, title="GAC Radon Removal Calculator", size=(560, 680))
-
+        
+        if os.path.exists(APP_ICON_PATH):
+            icon = wx.Icon(APP_ICON_PATH, wx.BITMAP_TYPE_ICO)
+            self.SetIcon(icon)
         self.container = wx.Panel(self)
         self.container_sizer = wx.BoxSizer(wx.VERTICAL)
         self.container.SetSizer(self.container_sizer)
 
+        # Instantiate panels
+        self.logo_panel = LogoScreen(self.container, self, LOGO_PNG_PATH)
         self.user_input_panel = UserInputPanel(self.container, self)
         self.waste_disposal_panel = WasteDisposalPanel(self.container, self)
         self.xprotocol_panel = XProtocolPanel(self.container, self)
-        self.cancer_risk_panel = StubPanel(self.container, self, "Cancer risks screen")
-        self.gamma_radiation_panel = StubPanel(self.container, self, "Gamma radiation screen")
+        self.gamma_radiation_panel = GammaRadiationPanel(self.container, self)
+        self.cancer_risk_panel = CancerRiskPanel(self.container, self)
 
         self.panels = [
-            self.user_input_panel, self.waste_disposal_panel, self.xprotocol_panel,
-            self.cancer_risk_panel, self.gamma_radiation_panel,
+            self.logo_panel, self.user_input_panel, self.waste_disposal_panel, 
+            self.xprotocol_panel, self.cancer_risk_panel, self.gamma_radiation_panel,
         ]
         for p in self.panels:
             self.container_sizer.Add(p, 1, wx.EXPAND)
             p.Hide()
 
         self._build_menu()
-        self.show_panel(self.user_input_panel)
+        
+        # Start at the logo screen
+        self.show_panel(self.logo_panel)
         self.Centre()
 
     # -----------------------------------------------------------------

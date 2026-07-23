@@ -11,12 +11,152 @@
 - Keep the codebase readable and open so radon mitigation professionals, regulators, or hobbyist reviewers can inspect exactly how a result was produced.
 - Package as a standalone Windows executable via PyInstaller so the tool doesn't require a Python install to run.
 
+## Current State
+
+- User input screen        (main entry screen)
+- Waste disposal screen    (Pb-210 growth curve + pCi/g results)
+- X-Protocol screen        (1-year GAC use, user-defined volume/density)
+- Cancer risks screen      (stub - Non-Functional)
+- Gamma radiation screen   (stub - Non-Functional)
+- Bq <-> Ci calculator     (popup dialog - Non-Functional)
+
+## Modeling Assumptions and Current Methodology
+
+The original Carbdose source code and technical specification are not currently available. Where the underlying methodology could be inferred from established nuclear physics or the original application's behavior, those models have been reproduced. Where the original implementation could not be determined, reasonable engineering approximations or empirical calibration have been used and are documented below.
+
+These assumptions are intended to be temporary until they can be verified against the original EPA/CDC methodology or reviewed by a subject matter expert.
+
+### Radioactive Decay
+
+The current implementation models Pb-210 ingrowth using the standard radioactive buildup equation:
+
+```
+λ = ln(2) / T½
+
+Fraction of equilibrium = 1 − exp(−λt)
+```
+
+where:
+
+- Pb-210 half-life = **22.3 years**
+- `t` = elapsed time in years
+
+This produces the exponential approach toward secular equilibrium.
+
+### Decay Chain Simplification
+
+The decay chain
+
+```
+Rn-222
+→ Po-218
+→ Pb-214
+→ Bi-214
+→ Po-214
+→ Pb-210
+```
+
+is treated as effectively instantaneous compared with the 22.3-year half-life of Pb-210.
+
+This allows the application to model only the slow ingrowth of Pb-210 bottleneck over time.
+
+### Secular Equilibrium
+
+After approximately one year, the application assumes:
+
+```
+Activity(Pb-210)
+≈ Activity(Bi-210)
+≈ Activity(Po-210)
+```
+
+Therefore the "Pb-210 plus progeny" calculation is approximated as
+
+```
+Total Activity = 3 × Pb-210 Activity
+```
+
+This reflects the expected secular equilibrium of the long-lived parent and its short-lived daughters.
+
+### Water Treatment Model
+
+The current implementation assumes:
+
+- Constant influent radon concentration
+- Constant water usage
+- Constant GAC removal efficiency
+- Continuous operation throughout the selected operating period
+- Linear accumulation of captured activity
+
+Captured activity is modeled as proportional to:
+
+- influent activity
+- water volume processed
+- removal efficiency
+- operating time
+
+No breakthrough curve or adsorption kinetics are currently modeled.
+
+### Geometry Assumptions
+
+Two calculation methods are currently implemented:
+
+- Uniform activity distributed throughout an entire 2 ft³ GAC column.
+- Activity concentrated within the upper 5 inches of the GAC bed.
+
+The current top-layer calculation assumes a 44-inch column height. This is an approximation and should be replaced once more accurate information is available.
+
+### Density Assumptions
+
+Current density values are:
+
+- Wet GAC: **1.00 g/cm³**
+- Dry GAC: **0.45 g/cm³**
+
+User-defined density is also supported by the X-Protocol screen.
+
+### Unit Conversions
+
+The application prefers imperial gallons, and liters (when present) are a conversion.
+The application currently uses standard accepted conversion constants:
+
+- 1 gallon = 3.78541 liters
+- 1 cubic foot = 28,316.846592 cm³
+- 1 Curie = 3.7 × 10¹⁰ Becquerels
+- 1 m³ = 1000 liters
+
+### Known Placeholder
+
+One calculation remains an empirical approximation.
+
+The conversion from accumulated captured radon to total Pb-210 currently contains a calibration constant derived from matching known outputs of the original Carbdose software rather than from documented first-principles equations.
+
+This calibration reproduces available reference cases but should be replaced once the original EPA/CDC calculation methodology is obtained.
+
+## Future Verification
+
+The following portions of the model should be reviewed with a subject matter expert:
+
+- Original mass-balance equation relating captured radon to accumulated Pb-210.
+- Intended treatment of adsorption and breakthrough over time.
+- Official GAC column dimensions used by the original software.
+- Original assumptions regarding activity distribution within the media.
+- Default density values used by Carbdose.
+- Any additional corrections, scaling factors, or engineering assumptions present in the original implementation.
+
 ## Acknowledgements
 
 - The original **Carbdose** application and its underlying methodology, developed for the EPA in the 1990s to support radon mitigation via granular activated carbon (GAC) filtration.
 - Built with [wxPython](https://www.wxpython.org/).
 - Packaged with [PyInstaller](https://pyinstaller.org/).
+- Markdown and Browser python libraries
+- icon used with permission of The Moose Party.
 
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
+
+## Notice
+Copyright 2026 Quinn Knowles
+
+Licensed under the Apache License, Version 2.0
