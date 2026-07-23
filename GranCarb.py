@@ -996,8 +996,7 @@ class StubPanel(wx.Panel):
 
         outer.Add(
             wx.StaticText(
-                self, label="Screen layout not yet provided - send a reference\n"
-                             "screenshot and I'll build this one out too.",
+                self, label="Screen layout not yet provided - send a reference\n",
                 style=wx.ALIGN_CENTER,
             ),
             0, wx.ALIGN_CENTER,
