@@ -20,6 +20,7 @@ import sys
 import wx.html2
 import wx
 from GAC_physics import *
+from GAC_theme import *
 
 # ------------------------------------------
 #PyInstaller references
@@ -37,18 +38,19 @@ LOGO_PNG_PATH   = resource_path(os.path.join("src", "MooseParty.png"))
 APP_ICON_PATH   = resource_path(os.path.join("src", "MooseParty.ico"))
 README_MD_PATH  = resource_path("README.md")
     
-    
 # ---------------------------------------------------------------------------
-# Shared visual constants
-# ---------------------------------------------------------------------------
-YELLOW = wx.Colour(255, 255, 204)
-BLUE_TEXT = wx.Colour(0, 0, 200)
-GREEN_RESULT = wx.Colour(0, 200, 0)
-YELLOW_RESULT = wx.Colour(240, 220, 0)
-RED_RESULT = wx.Colour(220, 0, 0)
+# Colors and visual elements -- see GAC_theme.py
+# ---------------------------------------------------------------------------    
+from GAC_theme import (
+YELLOW,
+BLUE_TEXT,
+GREEN_RESULT,
+YELLOW_RESULT,
+RED_RESULT
+)
 
 # ---------------------------------------------------------------------------
-# Physics / unit constants and functions -- see gac_physics.py
+# Physics / unit constants and functions -- see GAC_physics.py
 # ---------------------------------------------------------------------------
 from GAC_physics import (
     #constants
@@ -62,6 +64,9 @@ from GAC_physics import (
     CALIBRATION_CONSTANT,
     PCI_PER_G_RED_THRESHOLD,
     PCI_PER_G_YELLOW_THRESHOLD,
+    DEFAULT_WET_DENSITY,
+    DEFAULT_DRY_DENSITY,
+    X_PROTOCOL_YEARS,
     
     #bq ci calc
     BQ_PER_CI,
@@ -71,20 +76,11 @@ from GAC_physics import (
     #functions
     pb210_growth_fraction,
     total_pb210_pci_at_equilibrium,
+    pci_per_gram,
+    years_to_reach_threshold
 )
 
-
-
-
-
-
-
-
-
-
-
-
-
+#When drawing the graph on Waste disposal screen, determine the color of the dot based on GAC_physics constants
 def pci_per_gram_colour(value):
     """Legend colour for a pCi/g reading: red/yellow/green vs thresholds in gac_physics.py."""
     if value > PCI_PER_G_RED_THRESHOLD:
@@ -554,7 +550,7 @@ class GrowthCurvePanel(wx.Panel):
         if not self.volume_cm3:
             return 0.0
         total_now = self.total_max_pci * pb210_growth_fraction(years)
-        return total_now / self.volume_cm3
+        return pci_per_gram(total_now, self.volume_cm3)
 
     def on_paint(self, event):
         dc = wx.AutoBufferedPaintDC(self)
@@ -757,27 +753,17 @@ class WasteDisposalPanel(wx.Panel):
         self.graph.clear()
 
     def _calculate_red_zone_time(self, total_max_pci, volume_cm3):
-        """Finds the month/year step where pCi/g exceeds 2000 pCi/g."""
-        if not volume_cm3 or total_max_pci <= 0:
-            return "N/A"
-
-        # Check in month intervals up to 100 years
-        for month in range(1, 100 * 12 + 1):
-            yr = month / 12.0
-            total_now = total_max_pci * pb210_growth_fraction(yr)
-            pci_g = total_now / volume_cm3
-
-            if pci_g > 2000.0:
-                years_part = month // 12
-                months_part = month % 12
-                if years_part > 0 and months_part > 0:
-                    return f"{years_part} yrs, {months_part} mos"
-                elif years_part > 0:
-                    return f"{years_part} yrs"
-                else:
-                    return f"{months_part} mos"
-
-        return "> 100 yrs"
+        """Formats the year the pCi/g reading crosses the red threshold."""
+        years = years_to_reach_threshold(total_max_pci, volume_cm3, PCI_PER_G_RED_THRESHOLD)
+        if years is None:
+            return "N/A" if not volume_cm3 or total_max_pci <= 0 else "> 100 yrs"
+        years_part = int(years)
+        months_part = round((years - years_part) * 12)
+        if years_part > 0 and months_part > 0:
+            return f"{years_part} yrs, {months_part} mos"
+        elif years_part > 0:
+            return f"{years_part} yrs"
+        return f"{months_part} mos"
 
     def on_back(self, event):
         self.frame.show_panel(self.frame.user_input_panel)
@@ -800,7 +786,7 @@ class WasteDisposalPanel(wx.Panel):
         total_now = total_max * pb210_growth_fraction(years)
 
         volume_cm3 = LAYER_VOLUME_CM3 if self.rb_layer.GetValue() else TWO_CUFT_CM3
-        pci_per_g_wet = total_now / volume_cm3 if volume_cm3 else 0.0
+        pci_per_g_wet = pci_per_gram(total_now, volume_cm3)
 
         self.total_pb210.SetValue(f"{total_now:.2e}")
         self.pci_per_g.SetValue(f"{pci_per_g_wet:.2f}")
@@ -848,7 +834,12 @@ class XProtocolPanel(wx.Panel):
 
         density_row = wx.BoxSizer(wx.HORIZONTAL)
         self.user_density = wx.SpinCtrlDouble(
-            self, min=0.05, max=3.0, inc=0.01, initial=0.45, size=(90, -1)
+            self,
+            min=0.05,
+            max=3.0,
+            inc=0.01,
+            initial=DEFAULT_DRY_DENSITY,
+            size=(90, -1),
         )
         self.user_density.SetDigits(2)
         density_row.Add(self.user_density, 0)
@@ -938,17 +929,22 @@ class XProtocolPanel(wx.Panel):
         days = safe_float(uip.days_operating, default=30.0)
 
         total_max = total_pb210_pci_at_equilibrium(activity, volume, unit, efficiency, days)
-        pb210_1yr = total_max * pb210_growth_fraction(1.0)
+        pb210_1yr = total_max * pb210_growth_fraction(X_PROTOCOL_YEARS)
 
         volume_cm3 = safe_float(self.user_volume_cm3, default=TWO_CUFT_CM3)
         user_density = self.user_density.GetValue()
 
         def fill(fields, pci):
             fields[0].SetValue(f"{pci:.3e}")
-            fields[1].SetValue(f"{(pci / volume_cm3 / 1.00):.3f}" if volume_cm3 else "0")
-            fields[2].SetValue(f"{(pci / volume_cm3 / 0.45):.3f}" if volume_cm3 else "0")
+            fields[1].SetValue(
+                f"{(pci / volume_cm3 / DEFAULT_WET_DENSITY):.3f}" if volume_cm3 else "0"
+            )
+            fields[2].SetValue(
+                f"{(pci / volume_cm3 / DEFAULT_DRY_DENSITY):.3f}" if volume_cm3 else "0"
+            )
             fields[3].SetValue(
-                f"{(pci / volume_cm3 / user_density):.3f}" if volume_cm3 and user_density else "0"
+                f"{(pci / volume_cm3 / user_density):.3f}"
+                if volume_cm3 and user_density else "0"
             )
 
         fill(self.pb210_only, pb210_1yr)
