@@ -19,7 +19,18 @@ function docstrings for what is physics-derived vs. curve-fit.
 """
 
 import math
-
+# ---------------------------------------------------------------------------
+# SME REVIEW OBJECTIVES
+# ---------------------------------------------------------------------------
+# Please verify:
+#
+# 1. The radioactive decay and ingrowth model.
+# 2. The engineering assumptions (geometry, density, efficiency).
+# 3. The regulatory thresholds used for waste classification.
+# 4. Whether any empirical calibration factors correspond to known
+#    CARBDOSE methodology or published references. (0.185?)
+# 5. Whether important physical processes have been omitted that should
+#    be included in a generalized implementation.
 
 # ===========================================================================
 # Bq <-> Ci unit conversion
@@ -54,7 +65,8 @@ TWO_CUFT_CM3 = 2 * CUFT_TO_CM3  # homogeneous-distribution column volume
 # Assumes a ~44" tall 2 cu ft column, and that the "waste disposal" case
 # only cares about the top 5" layer of media. Replace with real column
 # geometry when available.
-# Necessarily actual this will involve making assumptions
+# This will necessarily involve assumptions, the question is what assumptions would
+# generalize to common hardware.
 LAYER_VOLUME_FRACTION = 5.0 / 44.0
 LAYER_VOLUME_CM3 = TWO_CUFT_CM3 * LAYER_VOLUME_FRACTION
 
@@ -121,7 +133,7 @@ def total_pb210_pci_at_equilibrium(activity_pci_per_l, volume_val, unit,
 # first-principles radon/GAC mass-balance model. Needs a 3rd reference
 # point (ideally from different conditions) to validate before trusting
 # it outside the fitted range.
-# This is in crucial need of additional knowledge
+# This is in crucial need of additional review.
 CALIBRATION_CONSTANT = 5.4056
 
 
