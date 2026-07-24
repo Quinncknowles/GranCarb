@@ -9,6 +9,13 @@ a subject matter expert. The goal is to model the known Rn-222 decay
 chain where possible, and otherwise to reproduce the reference outputs
 of CARBDOSE using similar formulas. See individual
 function docstrings for what is physics-derived vs. curve-fit.
+
+# MODEL ASSUMPTION:
+# Radon removal efficiency is supplied by the user as a constant percentage
+# over the stated operating period. This model does not simulate adsorption
+# kinetics, GAC loading, breakthrough, or changes in removal efficiency with
+# time. If CARBDOSE incorporates those effects internally, they are not
+# reproduced here.
 """
 
 import math
