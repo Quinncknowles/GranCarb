@@ -12,43 +12,14 @@ Screens:
 
 Requires: pip install wxpython 
 Run:      python3 GranCarb.py
-
-------------------------------------------------------------------------
-PHYSICS / MODEL NOTES 
-------------------------------------------------------------------------
-None of the calculations currently included in this model have been checked
-or approved by a subject matter expert. The application does its best to 
-model its formula on known decay chain when possible. The application is 
-designed to copy the results given by CARBDOSE, using similar formula.
-
-Rn-222 captured on GAC decays through a chain of very short-lived progeny
-(Po-218, Pb-214, Bi-214, Po-214 - all well under an hour half-life) down
-to Pb-210, which is effectively long-lived (half-life = 22.3 years) by
-comparison. So on a "years" timescale, the chain above Pb-210 is treated
-as instantaneous, and the interesting slow process is the *ingrowth* of
-Pb-210 itself, which follows the standard buildup curve:
-
-    fraction_of_equilibrium(t) = 1 - exp(-lambda_Pb210 * t)
-    lambda_Pb210 = ln(2) / 22.3 (per year)
-
-Pb-210 itself decays to Bi-210 (t1/2 = 5.01 days) then Po-210
-(t1/2 = 138.4 days) then stable Pb-206. Both of those half-lives are
-tiny next to a year, so within about a year of Pb-210 being present,
-Bi-210 and Po-210 reach *secular equilibrium* with it - meaning their
-activities become essentially equal to the Pb-210 activity. That's why
-"Growth of Pb-210 plus Bi-210 and Po-210 progeny" is modeled here as
-3x the Pb-210-only activity (one full chain of three progeny in
-secular equilibrium), not something invented arbitrarily.
-------------------------------------------------------------------------
 """
 
-import math
 import webbrowser
 import os
 import sys
 import wx.html2
 import wx
-
+from GAC_physics import *
 
 # ------------------------------------------
 #PyInstaller references
@@ -77,54 +48,48 @@ YELLOW_RESULT = wx.Colour(240, 220, 0)
 RED_RESULT = wx.Colour(220, 0, 0)
 
 # ---------------------------------------------------------------------------
-# Physics / unit constants
+# Physics / unit constants and functions -- see gac_physics.py
 # ---------------------------------------------------------------------------
-PB210_HALFLIFE_YEARS = 22.3
-GALLONS_TO_LITERS = 3.78541
-CUFT_TO_CM3 = 28316.846592
-TWO_CUFT_CM3 = 2 * CUFT_TO_CM3          # homogeneous-distribution column volume
-LAYER_VOLUME_FRACTION = 5.0 / 44.0      # top-5" layer as a fraction of column volume
-                                         # (assumes ~44" tall 2 cu ft column - PLACEHOLDER,
-                                         #  replace with real geometry when available)
-LAYER_VOLUME_CM3 = TWO_CUFT_CM3 * LAYER_VOLUME_FRACTION
-
-PROGENY_MULTIPLIER = 3.0  # Pb-210 + Bi-210 + Po-210 at secular equilibrium
-
-# CALIBRATION_CONSTANT was fit against two known reference outputs from the
-# CARBDOSE Waste Disposal screen, both at "Selected time = 100 years" and the
-# "5 inch layer" method:
-#   activity=900,    12 gal, eff=95%, 30 days -> Total Pb-210 = 2.06E+05 pCi, 31.99 pCi/g
-#   activity=120000, 12 gal, eff=90%, 30 days -> Total Pb-210 = 2.60E+07 pCi, 4040.70 pCi/g
-# A plain "activity * volume * efficiency * days" formula overshoots both of
-# those by a consistent ~5.4x, so this constant divides that out. It is a
-# curve fit two examples, NOT derived from a first-principles
-# radon/GAC mass-balance model.
-CALIBRATION_CONSTANT = 5.4056
-
-
-def pb210_growth_fraction(years: float) -> float:
-    """Fraction of equilibrium Pb-210 activity reached after `years` of ingrowth."""
-    lam = math.log(2) / PB210_HALFLIFE_YEARS
-    return 1 - math.exp(-lam * years)
+from GAC_physics import (
+    #constants
+    PB210_HALFLIFE_YEARS,
+    GALLONS_TO_LITERS,
+    CUFT_TO_CM3,
+    TWO_CUFT_CM3,
+    LAYER_VOLUME_FRACTION,
+    LAYER_VOLUME_CM3,
+    PROGENY_MULTIPLIER,
+    CALIBRATION_CONSTANT,
+    PCI_PER_G_RED_THRESHOLD,
+    PCI_PER_G_YELLOW_THRESHOLD,
+    
+    #bq ci calc
+    BQ_PER_CI,
+    M3_TO_LITERS,
+    SI_PREFIXES,
+    
+    #functions
+    pb210_growth_fraction,
+    total_pb210_pci_at_equilibrium,
+)
 
 
-def total_pb210_pci_at_equilibrium(activity_pci_per_l, volume_val, unit,
-                                    efficiency_percent, days):
-    """
-    Total Pb-210 activity (pCi) that will eventually grow in, based on the
-    radon activity captured by the GAC bed over the stated operating period.
-    See CALIBRATION_CONSTANT above for why this isn't a bare multiplication.
-    """
-    volume_l = volume_val if unit == "Liters" else volume_val * GALLONS_TO_LITERS
-    daily_removed_pci = activity_pci_per_l * volume_l * (efficiency_percent / 100.0)
-    return (daily_removed_pci * days) / CALIBRATION_CONSTANT
+
+
+
+
+
+
+
+
+
 
 
 def pci_per_gram_colour(value):
-    """Legend colour for a pCi/g reading: red >2000, yellow 1000-2000, green <1000."""
-    if value > 2000:
+    """Legend colour for a pCi/g reading: red/yellow/green vs thresholds in gac_physics.py."""
+    if value > PCI_PER_G_RED_THRESHOLD:
         return RED_RESULT
-    elif value > 1000:
+    elif value > PCI_PER_G_YELLOW_THRESHOLD:
         return YELLOW_RESULT
     return GREEN_RESULT
 
@@ -136,24 +101,6 @@ def safe_float(text_ctrl, default=0.0):
         return default
 
 
-# ---------------------------------------------------------------------------
-# Bq <-> Ci popup calculator
-# ---------------------------------------------------------------------------
-# Metric prefixes available for each unit, mapped to their power-of-ten
-# exponent. "(none)" is the base unit (Bq or Ci with no prefix).
-SI_PREFIXES = [
-    ("p (10^-12)", -12),
-    ("n (10^-9)", -9),
-    ("u (10^-6)", -6),
-    ("m (10^-3)", -3),
-    ("(none)", 0),
-    ("k (10^3)", 3),
-    ("M (10^6)", 6),
-    ("G (10^9)", 9),
-    ("T (10^12)", 12),
-]
-BQ_PER_CI = 3.7e10          # exact definition
-M3_TO_LITERS = 1000.0       # 1 cubic meter = 1000 liters
 
 
 class BqCiDialog(wx.Frame):
