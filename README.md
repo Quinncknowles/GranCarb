@@ -150,7 +150,7 @@ The following portions of the model should be reviewed with a subject matter exp
 - Built with [wxPython](https://www.wxpython.org/).
 - Packaged with [PyInstaller](https://pyinstaller.org/).
 - Markdown and Browser python libraries
-- icon used with permission of The Moose Party.
+- Icon used with permission of The Moose Party.
 
 ## License
 
