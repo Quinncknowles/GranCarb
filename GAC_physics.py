@@ -14,8 +14,9 @@ function docstrings for what is physics-derived vs. curve-fit.
 # Radon removal efficiency is supplied by the user as a constant percentage
 # over the stated operating period. This model does not simulate adsorption
 # kinetics, GAC loading, breakthrough, or changes in removal efficiency with
-# time. If CARBDOSE incorporates those effects internally, they are not
-# reproduced here.
+# time. If CARBDOSE incorporates those effects internally, they are not yet
+# reproduced here. 
+#
 """
 
 import math
@@ -86,14 +87,14 @@ LAYER_VOLUME_CM3 = TWO_CUFT_CM3 * LAYER_VOLUME_FRACTION
 #     fraction_of_equilibrium(t) = 1 - exp(-lambda_Pb210 * t)
 #     lambda_Pb210 = ln(2) / 22.3 (per year)
 #
-# Pb-210 itself decays to Bi-210 (t1/2 = 5.01 days) then Po-210
+# Pb-210 itself decays to Bi-210 (t1/2 = 5.01 days) then Po-210 
 # (t1/2 = 138.4 days) then stable Pb-206. Both of those half-lives are
 # tiny next to a year, so within about a year of Pb-210 being present,
-# Bi-210 and Po-210 reach *secular equilibrium* with it -- meaning their
+# Bi-210 and Po-210 (~84%) reach *secular equilibrium* with it -- meaning their
 # activities become essentially equal to the Pb-210 activity. That's why
 # "Growth of Pb-210 plus Bi-210 and Po-210 progeny" is modeled below as
 # 3x the Pb-210-only activity (one full chain of three progeny in
-# secular equilibrium), not something invented arbitrarily.
+# secular equilibrium).
 
 PB210_HALFLIFE_YEARS = 22.3
 PROGENY_MULTIPLIER = 3.0  # Pb-210 + Bi-210 + Po-210 at secular equilibrium
@@ -132,9 +133,13 @@ def total_pb210_pci_at_equilibrium(activity_pci_per_l, volume_val, unit,
 # TODO: This is a curve fit to two examples, NOT derived from a
 # first-principles radon/GAC mass-balance model. Needs a 3rd reference
 # point (ideally from different conditions) to validate before trusting
-# it outside the fitted range.
+# it outside the fitted range. Its possible carbdose is using a steady-state accumulation factor.
 # This is in crucial need of additional review.
 CALIBRATION_CONSTANT = 5.4056
+
+#Correction
+RADON_HALF_LIFE_DAYS = 3.823
+LAMBDA_RADON = math.log(2) / RADON_HALF_LIFE_DAYS
 
 
 # ===========================================================================
@@ -226,3 +231,93 @@ DEFAULT_DRY_DENSITY = 0.45
 
 #X-Protocol Years
 X_PROTOCOL_YEARS = 1.0
+
+
+# Gamma Radiation
+# --- constants --------------------------------------------------------------
+ 
+# Reference distance used as the default in the Volume/Point source tabs
+# (screenshots use "1 meter" from the tank wall / center line).
+GAMMA_REFERENCE_DISTANCE_INCHES = 39.37  # 1 meter
+ 
+# Current residential annual dose limit guideline (mrem/yr) used to compute
+# the "safe distance" tab's headline figure. Screenshot references a
+# 100 mrem/yr standard.
+GAMMA_DOSE_LIMIT_MREM_YR = 100.0
+ 
+# Previous guideline used by older CARBDOSE versions, kept around so the
+# "safe distance" tab can show both for comparison (screenshot references
+# an older 170 mrem/yr NCRP-style standard).
+GAMMA_DOSE_LIMIT_LEGACY_MREM_YR = 170.0
+ 
+# Assumed occupancy pattern used to convert an hourly dose *rate* into an
+# annual dose for the safe-distance calculation.
+GAMMA_EXPOSURE_HOURS_PER_DAY = 8.0
+GAMMA_EXPOSURE_DAYS_PER_YEAR = 365.0
+
+# --- functions ----------------------------------------------------------
+ 
+def gamma_total_activity_pci(total_pb210_pci_at_equilibrium):
+    """Total gamma-relevant activity (Pb-210 + Bi-210 + Po-210 progeny) at
+    equilibrium, in pCi, used as the source term for the exposure-rate
+    calculations below.
+ 
+    GranCarb.py calls this as:
+        gamma_total_activity_pci(total_pb210_pci_at_equilibrium(...))
+ 
+    TODO: likely just `total_pb210_pci * PROGENY_MULTIPLIER`, but confirm
+    against whatever reference produced the 6.94E+07 pCi example figure.
+    """
+    raise NotImplementedError
+ 
+ 
+def gamma_exposure_rate_volume_source(total_activity_pci, distance_inches):
+    """Estimated exposure rate (mR/hr) at `distance_inches` from the GAC
+    column wall, treating the activity as a volume-distributed source.
+ 
+    Reference point: total_activity_pci=6.94E+07, distance=1 meter
+    (39.37 in) -> 7.28E-02 mR/hr.
+ 
+    TODO: fill in the actual dose-rate model (e.g. point-kernel /
+    self-shielded cylinder integration, or whatever calibration constant
+    CALIBRATION_CONSTANT was meant for).
+    """
+    raise NotImplementedError
+ 
+ 
+def gamma_exposure_rate_point_source(total_activity_pci, distance_inches):
+    """Estimated exposure rate (mR/hr) at `distance_inches` from the GAC
+    column center line, treating the total activity as an equivalent point
+    source (no self-shielding, simple inverse-square falloff from the
+    reference distance).
+ 
+    Reference point: total_activity_pci=6.94E+07, distance=1 meter
+    (39.37 in) -> 8.54E-02 mR/hr.
+ 
+    TODO: likely
+        gamma_exposure_rate_point_source(total_activity_pci, GAMMA_REFERENCE_DISTANCE_INCHES)
+        * (GAMMA_REFERENCE_DISTANCE_INCHES / distance_inches) ** 2
+    once the reference-distance exposure rate is derived from
+    total_activity_pci; confirm against the 8.54E-02 mR/hr reference figure.
+    """
+    raise NotImplementedError
+ 
+ 
+def gamma_safe_distance_inches(total_activity_pci, dose_limit_mrem_yr,
+                                hours_per_day, days_per_year):
+    """Distance (inches) from the GAC column wall at which the exposure
+    rate drops low enough that hours_per_day * days_per_year of exposure
+    stays under dose_limit_mrem_yr for the year (1 mR ~= 1 mrem for gamma).
+ 
+    Returns a (distance_inches, exposure_rate_mR_per_hr) tuple - the second
+    value is the exposure rate *at* that safe distance, for display.
+ 
+    Reference point: dose_limit_mrem_yr=100, hours_per_day=8,
+    days_per_year=365 -> distance ~57.6 in, exposure ~0.034 mR/hr.
+ 
+    TODO: solve gamma_exposure_rate_volume_source(total_activity_pci, d)
+    == dose_limit_mrem_yr / (hours_per_day * days_per_year) for d, e.g. by
+    inverting whatever falloff model backs gamma_exposure_rate_volume_source.
+    """
+    raise NotImplementedError
+ 
