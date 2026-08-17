@@ -137,7 +137,7 @@ This calibration reproduces available reference cases but should be replaced onc
 
 The following portions of the model should be reviewed with a subject matter expert:
 
-- Original mass-balance equation relating captured radon to accumulated Pb-210.
+- Original mathematical relationship between captured Rn-222 activity and resulting Pb-210 inventory.
 - Intended treatment of adsorption and breakthrough over time.
 - Official GAC column dimensions used by the original software.
 - Original assumptions regarding activity distribution within the media.

@@ -12,43 +12,16 @@ Screens:
 
 Requires: pip install wxpython 
 Run:      python3 GranCarb.py
-
-------------------------------------------------------------------------
-PHYSICS / MODEL NOTES 
-------------------------------------------------------------------------
-None of the calculations currently included in this model have been checked
-or approved by a subject matter expert. The application does its best to 
-model its formula on known decay chain when possible. The application is 
-designed to copy the results given by CARBDOSE, using similar formula.
-
-Rn-222 captured on GAC decays through a chain of very short-lived progeny
-(Po-218, Pb-214, Bi-214, Po-214 - all well under an hour half-life) down
-to Pb-210, which is effectively long-lived (half-life = 22.3 years) by
-comparison. So on a "years" timescale, the chain above Pb-210 is treated
-as instantaneous, and the interesting slow process is the *ingrowth* of
-Pb-210 itself, which follows the standard buildup curve:
-
-    fraction_of_equilibrium(t) = 1 - exp(-lambda_Pb210 * t)
-    lambda_Pb210 = ln(2) / 22.3 (per year)
-
-Pb-210 itself decays to Bi-210 (t1/2 = 5.01 days) then Po-210
-(t1/2 = 138.4 days) then stable Pb-206. Both of those half-lives are
-tiny next to a year, so within about a year of Pb-210 being present,
-Bi-210 and Po-210 reach *secular equilibrium* with it - meaning their
-activities become essentially equal to the Pb-210 activity. That's why
-"Growth of Pb-210 plus Bi-210 and Po-210 progeny" is modeled here as
-3x the Pb-210-only activity (one full chain of three progeny in
-secular equilibrium), not something invented arbitrarily.
-------------------------------------------------------------------------
 """
 
-import math
 import webbrowser
 import os
 import sys
 import wx.html2
+import socket
 import wx
-
+from GAC_physics import *
+from GAC_theme import *
 
 # ------------------------------------------
 #PyInstaller references
@@ -66,65 +39,121 @@ LOGO_PNG_PATH   = resource_path(os.path.join("src", "MooseParty.png"))
 APP_ICON_PATH   = resource_path(os.path.join("src", "MooseParty.ico"))
 README_MD_PATH  = resource_path("README.md")
     
+# ---------------------------------------------------------------------------
+# Colors and visual elements -- see GAC_theme.py
+# ---------------------------------------------------------------------------    
+from GAC_theme import (
+YELLOW,
+BLUE_TEXT,
+GREEN_RESULT,
+YELLOW_RESULT,
+RED_RESULT
+)
+
+# ---------------------------------------------------------------------------
+# Physics / unit constants and functions -- see GAC_physics.py
+# ---------------------------------------------------------------------------
+from GAC_physics import (
+    #constants
+    PB210_HALFLIFE_YEARS,
+    GALLONS_TO_LITERS,
+    CUFT_TO_CM3,
+    TWO_CUFT_CM3,
+    LAYER_VOLUME_FRACTION,
+    LAYER_VOLUME_CM3,
+    PROGENY_MULTIPLIER,
+    CALIBRATION_CONSTANT,
+    PCI_PER_G_RED_THRESHOLD,
+    PCI_PER_G_YELLOW_THRESHOLD,
+    DEFAULT_WET_DENSITY,
+    DEFAULT_DRY_DENSITY,
+    X_PROTOCOL_YEARS,
     
-# ---------------------------------------------------------------------------
-# Shared visual constants
-# ---------------------------------------------------------------------------
-YELLOW = wx.Colour(255, 255, 204)
-BLUE_TEXT = wx.Colour(0, 0, 200)
-GREEN_RESULT = wx.Colour(0, 200, 0)
-YELLOW_RESULT = wx.Colour(240, 220, 0)
-RED_RESULT = wx.Colour(220, 0, 0)
+    #bq ci calc
+    BQ_PER_CI,
+    M3_TO_LITERS,
+    SI_PREFIXES,
 
-# ---------------------------------------------------------------------------
-# Physics / unit constants
-# ---------------------------------------------------------------------------
-PB210_HALFLIFE_YEARS = 22.3
-GALLONS_TO_LITERS = 3.78541
-CUFT_TO_CM3 = 28316.846592
-TWO_CUFT_CM3 = 2 * CUFT_TO_CM3          # homogeneous-distribution column volume
-LAYER_VOLUME_FRACTION = 5.0 / 44.0      # top-5" layer as a fraction of column volume
-                                         # (assumes ~44" tall 2 cu ft column - PLACEHOLDER,
-                                         #  replace with real geometry when available)
-LAYER_VOLUME_CM3 = TWO_CUFT_CM3 * LAYER_VOLUME_FRACTION
+    #gamma radiation screen
+    GAMMA_REFERENCE_DISTANCE_INCHES,
+    GAMMA_DOSE_LIMIT_MREM_YR,
+    GAMMA_DOSE_LIMIT_LEGACY_MREM_YR,
+    GAMMA_EXPOSURE_HOURS_PER_DAY,
+    GAMMA_EXPOSURE_DAYS_PER_YEAR,
 
-PROGENY_MULTIPLIER = 3.0  # Pb-210 + Bi-210 + Po-210 at secular equilibrium
+    #functions
+    pb210_growth_fraction,
+    total_pb210_pci_at_equilibrium,
+    pci_per_gram,
+    years_to_reach_threshold,
 
-# CALIBRATION_CONSTANT was fit against two known reference outputs from the
-# CARBDOSE Waste Disposal screen, both at "Selected time = 100 years" and the
-# "5 inch layer" method:
-#   activity=900,    12 gal, eff=95%, 30 days -> Total Pb-210 = 2.06E+05 pCi, 31.99 pCi/g
-#   activity=120000, 12 gal, eff=90%, 30 days -> Total Pb-210 = 2.60E+07 pCi, 4040.70 pCi/g
-# A plain "activity * volume * efficiency * days" formula overshoots both of
-# those by a consistent ~5.4x, so this constant divides that out. It is a
-# curve fit two examples, NOT derived from a first-principles
-# radon/GAC mass-balance model.
-CALIBRATION_CONSTANT = 5.4056
+    #gamma radiation functions
+    gamma_total_activity_pci,
+    gamma_exposure_rate_volume_source,
+    gamma_exposure_rate_point_source,
+    gamma_safe_distance_inches,
+)
 
+# pCi <---> Bq unit dictionary
+# Unit conversion constants
+PCI_TO_BQ = 0.037             # 1 pCi = 0.037 Bq
+PCI_L_TO_BQ_M3 = 37.0         # 1 pCi/L = 37 Bq/m³
+PCI_G_TO_BQ_G = 0.037         # 1 pCi/g = 0.037 Bq/g
+PCI_G_TO_BQ_KG = 37.0         # 1 pCi/g = 37 Bq/kg
 
-def pb210_growth_fraction(years: float) -> float:
-    """Fraction of equilibrium Pb-210 activity reached after `years` of ingrowth."""
-    lam = math.log(2) / PB210_HALFLIFE_YEARS
-    return 1 - math.exp(-lam * years)
+UNIT_CONFIG = {
+    "Ci": {
+        # Labels & Headings
+        "influent_activity_unit": "pCi/l",
+        "waste_disposal_activity_unit": "pCi/g",
+        "total_activity_unit": "pCi",
+        "red_threshold_label": "> 2000 pCi/gram",
+        "yellow_threshold_label": "<= 2000 pCi/gram",
+        "green_threshold_label": "< 1000 pCi/gram",
+        "red_zone_title": "Red zone entry (>2000 pCi/g)",
+        
+        # Threshold Numerical Values (Internal pCi/g)
+        "green_threshold_val": 1000.0,
+        "red_threshold_val": 2000.0,
 
+        # Conversion Functions (Raw Internal pCi -> Display Value)
+        "convert_influent": lambda pci_l: pci_l,
+        "convert_mass_activity": lambda pci_g: pci_g,
+        "convert_total_activity": lambda pci: pci,
 
-def total_pb210_pci_at_equilibrium(activity_pci_per_l, volume_val, unit,
-                                    efficiency_percent, days):
-    """
-    Total Pb-210 activity (pCi) that will eventually grow in, based on the
-    radon activity captured by the GAC bed over the stated operating period.
-    See CALIBRATION_CONSTANT above for why this isn't a bare multiplication.
-    """
-    volume_l = volume_val if unit == "Liters" else volume_val * GALLONS_TO_LITERS
-    daily_removed_pci = activity_pci_per_l * volume_l * (efficiency_percent / 100.0)
-    return (daily_removed_pci * days) / CALIBRATION_CONSTANT
+        # Inverse Conversion Functions (User Input Display -> Internal pCi)
+        "parse_influent": lambda val: val,
+    },
+    "Bq": {
+        # Labels & Headings
+        "influent_activity_unit": "Bq/m³",
+        "waste_disposal_activity_unit": "Bq/g",  # Or "Bq/kg" if preferred
+        "total_activity_unit": "Bq",
+        "red_threshold_label": f"> {2000 * PCI_G_TO_BQ_G:.1f} Bq/g",      # > 74.0 Bq/g
+        "yellow_threshold_label": f"<= {2000 * PCI_G_TO_BQ_G:.1f} Bq/g",   # <= 74.0 Bq/g
+        "green_threshold_label": f"< {1000 * PCI_G_TO_BQ_G:.1f} Bq/g",     # < 37.0 Bq/g
+        "red_zone_title": f"Red zone entry (>{2000 * PCI_G_TO_BQ_G:.1f} Bq/g)",
 
+        # Threshold Numerical Values (Display Bq/g equivalents)
+        "green_threshold_val": 1000.0 * PCI_G_TO_BQ_G,  # 37.0 Bq/g
+        "red_threshold_val": 2000.0 * PCI_G_TO_BQ_G,    # 74.0 Bq/g
 
+        # Conversion Functions (Raw Internal pCi -> Display Value)
+        "convert_influent": lambda pci_l: pci_l * PCI_L_TO_BQ_M3,
+        "convert_mass_activity": lambda pci_g: pci_g * PCI_G_TO_BQ_G,
+        "convert_total_activity": lambda pci: pci * PCI_TO_BQ,
+
+        # Inverse Conversion Functions (User Input Display -> Internal pCi)
+        "parse_influent": lambda val: val / PCI_L_TO_BQ_M3,
+    }
+}
+
+#When drawing the graph on Waste disposal screen, determine the color of the dot based on GAC_physics constants
 def pci_per_gram_colour(value):
-    """Legend colour for a pCi/g reading: red >2000, yellow 1000-2000, green <1000."""
-    if value > 2000:
+    """Legend colour for a pCi/g reading: red/yellow/green vs thresholds in gac_physics.py."""
+    if value > PCI_PER_G_RED_THRESHOLD:
         return RED_RESULT
-    elif value > 1000:
+    elif value > PCI_PER_G_YELLOW_THRESHOLD:
         return YELLOW_RESULT
     return GREEN_RESULT
 
@@ -135,25 +164,16 @@ def safe_float(text_ctrl, default=0.0):
     except (ValueError, AttributeError):
         return default
 
-
-# ---------------------------------------------------------------------------
-# Bq <-> Ci popup calculator
-# ---------------------------------------------------------------------------
-# Metric prefixes available for each unit, mapped to their power-of-ten
-# exponent. "(none)" is the base unit (Bq or Ci with no prefix).
-SI_PREFIXES = [
-    ("p (10^-12)", -12),
-    ("n (10^-9)", -9),
-    ("u (10^-6)", -6),
-    ("m (10^-3)", -3),
-    ("(none)", 0),
-    ("k (10^3)", 3),
-    ("M (10^6)", 6),
-    ("G (10^9)", 9),
-    ("T (10^12)", 12),
-]
-BQ_PER_CI = 3.7e10          # exact definition
-M3_TO_LITERS = 1000.0       # 1 cubic meter = 1000 liters
+# Determine if the application has access to the internet for the sake of accessing the online README.md
+def is_connected(host="8.8.8.8", port=53, timeout=3):
+    """Checks for internet connection by trying to connect to a reliable host."""
+    try:
+        # Connect to Google DNS (8.8.8.8) or a similar reliable server
+        socket.setdefaulttimeout(timeout)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+        return True
+    except socket.error:
+        return False
 
 
 class BqCiDialog(wx.Frame):
@@ -429,7 +449,11 @@ class UserInputPanel(wx.Panel):
         self.influent_activity = wx.TextCtrl(self)
         self.influent_activity.SetBackgroundColour(YELLOW)
         grid.Add(self.influent_activity, 1, wx.EXPAND)
-        grid.Add(wx.StaticText(self, label="pCi/l"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.influent_unit_label = wx.StaticText(
+            self, label=UNIT_CONFIG[self.frame.unit_system]["influent_activity_unit"]
+        )
+        grid.Add(self.influent_unit_label, 0, wx.ALIGN_CENTER_VERTICAL)
+        self._last_unit_cfg = UNIT_CONFIG[self.frame.unit_system]
 
         grid.Add(
             wx.StaticText(self, label="Influent volume in gallons or liters :"),
@@ -524,6 +548,27 @@ class UserInputPanel(wx.Panel):
 
         self.SetSizer(outer)
 
+    def refresh_units(self):
+        """Relabel the influent-activity unit and, if a value is already
+        entered, convert it (via UNIT_CONFIG's parse/convert pair) so the
+        number stays physically the same when the unit system flips."""
+        new_cfg = UNIT_CONFIG[self.frame.unit_system]
+        old_cfg = self._last_unit_cfg
+
+        text = self.influent_activity.GetValue().strip()
+        if text:
+            try:
+                display_val = float(text)
+                internal_pci_l = old_cfg["parse_influent"](display_val)
+                new_display_val = new_cfg["convert_influent"](internal_pci_l)
+                self.influent_activity.SetValue(f"{new_display_val:.4g}")
+            except ValueError:
+                pass
+
+        self.influent_unit_label.SetLabel(new_cfg["influent_activity_unit"])
+        self._last_unit_cfg = new_cfg
+        self.Layout()
+
     def get_volume_unit(self):
         return "Gallons" if self.rb_gallons.GetValue() else "Liters"
 
@@ -607,7 +652,7 @@ class GrowthCurvePanel(wx.Panel):
         if not self.volume_cm3:
             return 0.0
         total_now = self.total_max_pci * pb210_growth_fraction(years)
-        return total_now / self.volume_cm3
+        return pci_per_gram(total_now, self.volume_cm3)
 
     def on_paint(self, event):
         dc = wx.AutoBufferedPaintDC(self)
@@ -628,7 +673,7 @@ class GrowthCurvePanel(wx.Panel):
             return margin_t + plot_h - (percent / 100.0) * plot_h
 
         label_font = gc.CreateFont(
-            wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL),
+            wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL),
             wx.BLACK,
         )
         gc.SetFont(label_font)
@@ -639,10 +684,25 @@ class GrowthCurvePanel(wx.Panel):
             y = py(pct)
             gc.StrokeLine(margin_l, y, margin_l + plot_w, y)
             gc.DrawText(str(pct), 5, y - 6)
+
         for yr in (0, 25, 50, 75, 100):
             x = px(yr)
             gc.StrokeLine(x, margin_t, x, margin_t + plot_h)
             gc.DrawText(str(yr), x - 8, margin_t + plot_h + 5)
+
+        # X-axis label
+        gc.DrawText(
+            "Years",
+            margin_l + plot_w / 2 - 15,
+            margin_t + plot_h + 20
+        )
+
+        # Y-axis label
+        gc.PushState()
+        gc.Translate(12, margin_t + plot_h / 2)
+        gc.Rotate(-3.14159 / 2)
+        gc.DrawText("% Pb-210 Equilibrium", -35, 15)
+        gc.PopState()
 
         # axis border
         gc.SetPen(wx.Pen(wx.BLACK, 1))
@@ -724,10 +784,14 @@ class WasteDisposalPanel(wx.Panel):
         results_row = wx.BoxSizer(wx.HORIZONTAL)
 
         # Legend
+        cfg = UNIT_CONFIG[self.frame.unit_system]
         legend_sizer = wx.BoxSizer(wx.VERTICAL)
-        legend_sizer.Add(self._legend_item("> 2000 pCi/gram", RED_RESULT), 0, wx.BOTTOM, 4)
-        legend_sizer.Add(self._legend_item("<= 2000 pCi/gram", YELLOW_RESULT), 0, wx.BOTTOM, 4)
-        legend_sizer.Add(self._legend_item("< 1000 pCi/gram", GREEN_RESULT), 0, wx.BOTTOM, 4)
+        red_row, self.legend_red_lbl = self._legend_item(cfg["red_threshold_label"], RED_RESULT)
+        yellow_row, self.legend_yellow_lbl = self._legend_item(cfg["yellow_threshold_label"], YELLOW_RESULT)
+        green_row, self.legend_green_lbl = self._legend_item(cfg["green_threshold_label"], GREEN_RESULT)
+        legend_sizer.Add(red_row, 0, wx.BOTTOM, 4)
+        legend_sizer.Add(yellow_row, 0, wx.BOTTOM, 4)
+        legend_sizer.Add(green_row, 0, wx.BOTTOM, 4)
         results_row.Add(legend_sizer, 0, wx.ALL, 8)
 
         # Graph
@@ -739,8 +803,9 @@ class WasteDisposalPanel(wx.Panel):
         # Numeric readouts grid
         readout_grid = wx.FlexGridSizer(cols=3, vgap=8, hgap=10)
         
-        # Row 1: pCi/g Pb-210
-        readout_grid.Add(wx.StaticText(self, label="pCi/g Pb-210"), 0, wx.ALIGN_CENTER_VERTICAL)
+        # Row 1: pCi/g Pb-210 (unit-aware label)
+        self.pci_row_label = wx.StaticText(self, label=f"{cfg['waste_disposal_activity_unit']} Pb-210")
+        readout_grid.Add(self.pci_row_label, 0, wx.ALIGN_CENTER_VERTICAL)
         self.pci_per_g = wx.TextCtrl(self, style=wx.TE_READONLY | wx.TE_CENTER)
         self.pci_per_g.SetBackgroundColour(GREEN_RESULT)
         readout_grid.Add(self.pci_per_g, 0, wx.EXPAND)
@@ -751,10 +816,12 @@ class WasteDisposalPanel(wx.Panel):
         self.total_pb210 = wx.TextCtrl(self, style=wx.TE_READONLY | wx.TE_CENTER)
         self.total_pb210.SetBackgroundColour(YELLOW)
         readout_grid.Add(self.total_pb210, 0, wx.EXPAND)
-        readout_grid.Add(wx.StaticText(self, label="pCi"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.total_pb210_unit_label = wx.StaticText(self, label=cfg["total_activity_unit"])
+        readout_grid.Add(self.total_pb210_unit_label, 0, wx.ALIGN_CENTER_VERTICAL)
 
         # Row 3: Red Zone Threshold Time (Bottom Right Readout)
-        readout_grid.Add(wx.StaticText(self, label="Red zone entry (>2000 pCi/g)"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.red_zone_row_label = wx.StaticText(self, label=cfg["red_zone_title"])
+        readout_grid.Add(self.red_zone_row_label, 0, wx.ALIGN_CENTER_VERTICAL)
         self.txt_red_zone_time = wx.TextCtrl(self, style=wx.TE_READONLY | wx.TE_CENTER)
         self.txt_red_zone_time.SetBackgroundColour(RED_RESULT)
         readout_grid.Add(self.txt_red_zone_time, 0, wx.EXPAND)
@@ -790,6 +857,9 @@ class WasteDisposalPanel(wx.Panel):
         self.btn_exit.Bind(wx.EVT_BUTTON, lambda e: frame.Close())
 
         self.SetSizer(outer)
+        self._last_total_now_pci = None   # internal pCi at selected year, cached for unit toggling
+        self._last_total_max_pci = None   # internal pCi at equilibrium, cached for unit toggling
+        self._last_volume_cm3 = None
         self._show_placeholder_readouts()
 
     def _legend_item(self, text, colour):
@@ -797,8 +867,9 @@ class WasteDisposalPanel(wx.Panel):
         swatch = wx.Panel(self, size=(14, 14))
         swatch.SetBackgroundColour(colour)
         row.Add(swatch, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
-        row.Add(wx.StaticText(self, label=text), 0, wx.ALIGN_CENTER_VERTICAL)
-        return row
+        label = wx.StaticText(self, label=text)
+        row.Add(label, 0, wx.ALIGN_CENTER_VERTICAL)
+        return row, label
 
     def _show_placeholder_readouts(self):
         """Blank state before Calculate has been pressed."""
@@ -810,34 +881,45 @@ class WasteDisposalPanel(wx.Panel):
         self.graph.clear()
 
     def _calculate_red_zone_time(self, total_max_pci, volume_cm3):
-        """Finds the month/year step where pCi/g exceeds 2000 pCi/g."""
-        if not volume_cm3 or total_max_pci <= 0:
-            return "N/A"
+        """Formats the year the pCi/g reading crosses the red threshold."""
+        years = years_to_reach_threshold(total_max_pci, volume_cm3, PCI_PER_G_RED_THRESHOLD)
+        if years is None:
+            return "N/A" if not volume_cm3 or total_max_pci <= 0 else "> 100 yrs"
+        years_part = int(years)
+        months_part = round((years - years_part) * 12)
+        if years_part > 0 and months_part > 0:
+            return f"{years_part} yrs, {months_part} mos"
+        elif years_part > 0:
+            return f"{years_part} yrs"
+        return f"{months_part} mos"
 
-        # Check in month intervals up to 100 years
-        for month in range(1, 100 * 12 + 1):
-            yr = month / 12.0
-            total_now = total_max_pci * pb210_growth_fraction(yr)
-            pci_g = total_now / volume_cm3
+    def refresh_units(self):
+        """Relabel the legend/readouts and, if a Calculate has already run,
+        redraw the readout values from the cached internal pCi figures."""
+        cfg = UNIT_CONFIG[self.frame.unit_system]
 
-            if pci_g > 2000.0:
-                years_part = month // 12
-                months_part = month % 12
-                if years_part > 0 and months_part > 0:
-                    return f"{years_part} yrs, {months_part} mos"
-                elif years_part > 0:
-                    return f"{years_part} yrs"
-                else:
-                    return f"{months_part} mos"
+        self.legend_red_lbl.SetLabel(cfg["red_threshold_label"])
+        self.legend_yellow_lbl.SetLabel(cfg["yellow_threshold_label"])
+        self.legend_green_lbl.SetLabel(cfg["green_threshold_label"])
+        self.pci_row_label.SetLabel(f"{cfg['waste_disposal_activity_unit']} Pb-210")
+        self.total_pb210_unit_label.SetLabel(cfg["total_activity_unit"])
+        self.red_zone_row_label.SetLabel(cfg["red_zone_title"])
 
-        return "> 100 yrs"
+        if self._last_total_now_pci is not None and self._last_volume_cm3:
+            pci_per_g_wet = pci_per_gram(self._last_total_now_pci, self._last_volume_cm3)
+            self.total_pb210.SetValue(f"{cfg['convert_total_activity'](self._last_total_now_pci):.2e}")
+            self.pci_per_g.SetValue(f"{cfg['convert_mass_activity'](pci_per_g_wet):.2f}")
+
+        self.Layout()
 
     def on_back(self, event):
         self.frame.show_panel(self.frame.user_input_panel)
 
     def on_calculate(self, event):
         uip = self.frame.user_input_panel
-        activity = safe_float(uip.influent_activity)
+        cfg = UNIT_CONFIG[self.frame.unit_system]
+        raw_activity = safe_float(uip.influent_activity)
+        activity = cfg["parse_influent"](raw_activity)
         volume = safe_float(uip.influent_volume)
         unit = uip.get_volume_unit()
         efficiency = safe_float(uip.removal_efficiency, default=95.0)
@@ -853,10 +935,19 @@ class WasteDisposalPanel(wx.Panel):
         total_now = total_max * pb210_growth_fraction(years)
 
         volume_cm3 = LAYER_VOLUME_CM3 if self.rb_layer.GetValue() else TWO_CUFT_CM3
-        pci_per_g_wet = total_now / volume_cm3 if volume_cm3 else 0.0
+        pci_per_g_wet = pci_per_gram(total_now, volume_cm3)
 
-        self.total_pb210.SetValue(f"{total_now:.2e}")
-        self.pci_per_g.SetValue(f"{pci_per_g_wet:.2f}")
+        # cache the internal (pCi) figures so refresh_units() can redraw the
+        # readouts in the current unit system without redoing the physics
+        self._last_total_now_pci = total_now
+        self._last_total_max_pci = total_max
+        self._last_volume_cm3 = volume_cm3
+
+        cfg = UNIT_CONFIG[self.frame.unit_system]
+        self.total_pb210.SetValue(f"{cfg['convert_total_activity'](total_now):.2e}")
+        self.pci_per_g.SetValue(f"{cfg['convert_mass_activity'](pci_per_g_wet):.2f}")
+        # colour is always judged against the internal pCi/g thresholds,
+        # independent of which unit is currently on display
         self.pci_per_g.SetBackgroundColour(pci_per_gram_colour(pci_per_g_wet))
         self.pci_per_g.Refresh()
 
@@ -901,7 +992,12 @@ class XProtocolPanel(wx.Panel):
 
         density_row = wx.BoxSizer(wx.HORIZONTAL)
         self.user_density = wx.SpinCtrlDouble(
-            self, min=0.05, max=3.0, inc=0.01, initial=0.45, size=(90, -1)
+            self,
+            min=0.05,
+            max=3.0,
+            inc=0.01,
+            initial=DEFAULT_DRY_DENSITY,
+            size=(90, -1),
         )
         self.user_density.SetDigits(2)
         density_row.Add(self.user_density, 0)
@@ -912,20 +1008,29 @@ class XProtocolPanel(wx.Panel):
 
         outer.Add(top_grid, 0, wx.ALL, 15)
 
-        self.pb210_only = self._results_box(
-            outer, "Growth of Pb-210 only",
-            ["pCi activity after 1 year of filter use",
-             "pCi/g Wet GAC after 1 year of filter use (density = 1.00)",
-             "pCi/g Dry GAC after 1 year of filter use (density = 0.45)",
-             "pCi/g GAC after 1 year of filter use (density user defined)"],
+        # (kind, label-template) pairs shared by both results boxes - "total"
+        # rows are routed through convert_total_activity, "mass" rows through
+        # convert_mass_activity, both driven by UNIT_CONFIG[self.frame.unit_system]
+        self._row_specs = [
+            ("total", lambda cfg: f"{cfg['total_activity_unit']} activity after 1 year of filter use"),
+            ("mass", lambda cfg: f"{cfg['waste_disposal_activity_unit']} Wet GAC after 1 year of filter use (density = 1.00)"),
+            ("mass", lambda cfg: f"{cfg['waste_disposal_activity_unit']} Dry GAC after 1 year of filter use (density = 0.45)"),
+            ("mass", lambda cfg: f"{cfg['waste_disposal_activity_unit']} GAC after 1 year of filter use (density user defined)"),
+        ]
+
+        self.pb210_only, self.pb210_only_labels = self._results_box(
+            outer, "Growth of Pb-210 only", self._row_specs,
         )
-        self.pb210_progeny = self._results_box(
-            outer, "Growth of Pb-210 plus Bi-210 and Po-210 progeny",
-            ["pCi activity after 1 year of filter use",
-             "pCi/g Wet GAC after 1 year of filter use (density = 1.00)",
-             "pCi/g Dry GAC after 1 year of filter use (density = 0.45)",
-             "pCi/g GAC after 1 year of filter use (density user defined)"],
+        self.pb210_progeny, self.pb210_progeny_labels = self._results_box(
+            outer, "Growth of Pb-210 plus Bi-210 and Po-210 progeny", self._row_specs,
         )
+
+        # cached internal pCi figures, used by refresh_units() to redraw
+        # without recalculating the underlying physics
+        self._last_pb210_1yr_pci = None
+        self._last_progeny_pci = None
+        self._last_volume_cm3 = None
+        self._last_user_density = None
 
         outer.AddStretchSpacer(1)
 
@@ -947,19 +1052,25 @@ class XProtocolPanel(wx.Panel):
 
         self.SetSizer(outer)
 
-    def _results_box(self, outer, title, labels):
+    def _results_box(self, outer, title, row_specs):
+        """row_specs: list of (kind, label_template(cfg)) tuples. Returns
+        (fields, labels) - both kept around so refresh_units() can restyle
+        them when the unit system changes."""
         box = wx.StaticBoxSizer(wx.StaticBox(self, label=title), wx.VERTICAL)
         grid = wx.FlexGridSizer(cols=2, vgap=6, hgap=10)
-        fields = []
-        for label in labels:
+        cfg = UNIT_CONFIG[self.frame.unit_system]
+        fields, labels = [], []
+        for _kind, template in row_specs:
             field = wx.TextCtrl(self, style=wx.TE_READONLY, size=(120, -1))
             field.SetBackgroundColour(YELLOW)
             grid.Add(field, 0)
-            grid.Add(wx.StaticText(self, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+            label = wx.StaticText(self, label=template(cfg))
+            grid.Add(label, 0, wx.ALIGN_CENTER_VERTICAL)
             fields.append(field)
+            labels.append(label)
         box.Add(grid, 0, wx.ALL, 8)
         outer.Add(box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 10)
-        return fields
+        return fields, labels
 
     def on_back(self, event):
         self.frame.show_panel(self.frame.user_input_panel)
@@ -991,32 +1102,86 @@ class XProtocolPanel(wx.Panel):
         days = safe_float(uip.days_operating, default=30.0)
 
         total_max = total_pb210_pci_at_equilibrium(activity, volume, unit, efficiency, days)
-        pb210_1yr = total_max * pb210_growth_fraction(1.0)
+        pb210_1yr = total_max * pb210_growth_fraction(X_PROTOCOL_YEARS)
 
         volume_cm3 = safe_float(self.user_volume_cm3, default=TWO_CUFT_CM3)
         user_density = self.user_density.GetValue()
 
-        def fill(fields, pci):
-            fields[0].SetValue(f"{pci:.3e}")
-            fields[1].SetValue(f"{(pci / volume_cm3 / 1.00):.3f}" if volume_cm3 else "0")
-            fields[2].SetValue(f"{(pci / volume_cm3 / 0.45):.3f}" if volume_cm3 else "0")
-            fields[3].SetValue(
-                f"{(pci / volume_cm3 / user_density):.3f}" if volume_cm3 and user_density else "0"
-            )
+        # cache the internal pCi figures so refresh_units() can redraw the
+        # readouts in the current unit system without recalculating
+        self._last_pb210_1yr_pci = pb210_1yr
+        self._last_progeny_pci = pb210_1yr * PROGENY_MULTIPLIER
+        self._last_volume_cm3 = volume_cm3
+        self._last_user_density = user_density
 
-        fill(self.pb210_only, pb210_1yr)
-        fill(self.pb210_progeny, pb210_1yr * PROGENY_MULTIPLIER)
+        self._fill_from_pci(self.pb210_only, self._last_pb210_1yr_pci)
+        self._fill_from_pci(self.pb210_progeny, self._last_progeny_pci)
+
+    def _fill_from_pci(self, fields, pci):
+        """Fill a results row's 4 fields from an internal pCi value, routing
+        every displayed number through UNIT_CONFIG[self.frame.unit_system]."""
+        cfg = UNIT_CONFIG[self.frame.unit_system]
+        volume_cm3 = self._last_volume_cm3
+        user_density = self._last_user_density
+
+        fields[0].SetValue(f"{cfg['convert_total_activity'](pci):.3e}")
+        if volume_cm3:
+            wet_pci_g = pci / volume_cm3 / DEFAULT_WET_DENSITY
+            dry_pci_g = pci / volume_cm3 / DEFAULT_DRY_DENSITY
+            fields[1].SetValue(f"{cfg['convert_mass_activity'](wet_pci_g):.3f}")
+            fields[2].SetValue(f"{cfg['convert_mass_activity'](dry_pci_g):.3f}")
+        else:
+            fields[1].SetValue("0")
+            fields[2].SetValue("0")
+        if volume_cm3 and user_density:
+            user_pci_g = pci / volume_cm3 / user_density
+            fields[3].SetValue(f"{cfg['convert_mass_activity'](user_pci_g):.3f}")
+        else:
+            fields[3].SetValue("0")
+
+    def refresh_units(self):
+        """Relabel both results boxes and, if Calculate has already run,
+        redraw the values from the cached internal pCi figures."""
+        cfg = UNIT_CONFIG[self.frame.unit_system]
+        for labels in (self.pb210_only_labels, self.pb210_progeny_labels):
+            for label, (_kind, template) in zip(labels, self._row_specs):
+                label.SetLabel(template(cfg))
+
+        if self._last_pb210_1yr_pci is not None:
+            self._fill_from_pci(self.pb210_only, self._last_pb210_1yr_pci)
+        if self._last_progeny_pci is not None:
+            self._fill_from_pci(self.pb210_progeny, self._last_progeny_pci)
+
+        self.Layout()
 
 
 # ---------------------------------------------------------------------------
 #  Gamma Radiation Screen - Tabs located below
 # ---------------------------------------------------------------------------
 class GammaRadiationPanel(wx.Panel):
+    """Owns the 3 gamma-radiation tabs and drives them from a single
+    'Calculate' press: the total activity (Pb-210 + progeny, at
+    equilibrium) is computed once here from the User input screen values
+    and then handed down to each tab, which is responsible for its own
+    distance-dependent exposure-rate math.
+    """
     def __init__(self, parent, frame):
         super().__init__(parent)
         self.frame = frame
+        self.total_activity_pci = None  # None until Calculate is pressed
 
         panel_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # --- Calculate bar --------------------------------------------
+        calc_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_calculate = wx.Button(self, label="Calculate")
+        self.btn_calculate.Bind(wx.EVT_BUTTON, self.on_calculate)
+        calc_sizer.Add(self.btn_calculate, 0, wx.ALL, 8)
+        self.lbl_total_activity = wx.StaticText(
+            self, label="Total activity (Pb-210 + progeny, at equilibrium): --"
+        )
+        calc_sizer.Add(self.lbl_total_activity, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 5)
+        panel_sizer.Add(calc_sizer, 0, wx.EXPAND)
 
         # Notebook Setup
         self.notebook = wx.Notebook(self)
@@ -1055,15 +1220,49 @@ class GammaRadiationPanel(wx.Panel):
         panel_sizer.Add(nav_sizer, 0, wx.EXPAND | wx.ALL, 10)
 
         self.SetSizer(panel_sizer)
+
+    def on_calculate(self, event):
+        """Pull the influent/GAC values from the User input screen, work out
+        the total Pb-210 + progeny activity at equilibrium, and push it down
+        into each tab so they can (re)draw their own exposure-rate figures.
+        """
+        uip = self.frame.user_input_panel
+        activity = safe_float(uip.influent_activity)
+        volume = safe_float(uip.influent_volume)
+        unit = uip.get_volume_unit()
+        efficiency = safe_float(uip.removal_efficiency, default=95.0)
+        days = safe_float(uip.days_operating, default=30.0)
+
+        total_pb210_max = total_pb210_pci_at_equilibrium(activity, volume, unit, efficiency, days)
+        self.total_activity_pci = gamma_total_activity_pci(total_pb210_max)
+
+        self.lbl_total_activity.SetLabel(
+            f"Total activity (Pb-210 + progeny, at equilibrium): {self.total_activity_pci:.2E} pCi"
+        )
+        self.Layout()
+
+        self.tab_volume.update_values(self.total_activity_pci)
+        self.tab_point.update_values(self.total_activity_pci)
+        self.tab_safe_dist.update_values(self.total_activity_pci)
         
 
 # ---------------------------------------------------------------------------
 #  Volume Source tab - Gamma Radiation Screen
 # ---------------------------------------------------------------------------
 class VolumeSourceTab(wx.Panel):
-    """'Volume source' tab matching screenshot reference."""
+    """'Volume source' tab matching screenshot reference.
+
+    Live version: total_activity_pci is pushed in from GammaRadiationPanel.on_calculate.
+    The exposure rate shown is recomputed from GAC_physics.gamma_exposure_rate_volume_source
+    at whatever distance is in txt_distance (default: 1 meter from the tank wall).
+    """
+
+    #: minimum distance from the tank wall the physics model is valid for
+    MIN_DISTANCE_INCHES = 36.0
+
     def __init__(self, parent):
         super().__init__(parent)
+        self.total_activity_pci = None  # None until Calculate has been pressed
 
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         main_sizer.AddSpacer(15)
@@ -1080,13 +1279,11 @@ class VolumeSourceTab(wx.Panel):
         self.box_panel.SetBackgroundColour(wx.Colour(210, 210, 210))  # Muted grey box background
         box_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        # Dynamic calculation display string
-        self.calc_text = (
-            "The estimated exposure rate 1 meter from the GAC filter wall for a "
-            "volume distributed source of 6.94E+07 pCi of radon in equilibrium "
-            "with its progeny is: 7.28E-02 mR/hr"
+        self.lbl_calc = wx.StaticText(
+            self.box_panel,
+            label="Press Calculate above (after filling in the User input screen) "
+                  "to estimate the exposure rate.",
         )
-        self.lbl_calc = wx.StaticText(self.box_panel, label=self.calc_text)
         self.lbl_calc.Wrap(450)
         box_sizer.Add(self.lbl_calc, 1, wx.ALL | wx.EXPAND, 12)
         self.box_panel.SetSizer(box_sizer)
@@ -1102,18 +1299,46 @@ class VolumeSourceTab(wx.Panel):
         main_sizer.Add(instr_lbl, 0, wx.LEFT | wx.RIGHT, 25)
         main_sizer.AddSpacer(10)
 
-        # 4. Input Field
-        self.txt_distance = wx.TextCtrl(self, value=">36 inches", size=(140, 25), style=wx.TE_CENTER)
-        main_sizer.Add(self.txt_distance, 0, wx.ALIGN_CENTER)
+        # 4. Input Field + recompute button
+        dist_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.txt_distance = wx.TextCtrl(
+            self, value="39.4", size=(100, 25), style=wx.TE_CENTER | wx.TE_PROCESS_ENTER,
+        )
+        dist_row.Add(self.txt_distance, 0, wx.RIGHT, 8)
+        dist_row.Add(wx.StaticText(self, label="inches"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
+        self.btn_update = wx.Button(self, label="Update")
+        dist_row.Add(self.btn_update, 0)
+        main_sizer.Add(dist_row, 0, wx.ALIGN_CENTER)
+
+        self.txt_distance.Bind(wx.EVT_TEXT_ENTER, self.on_recalculate)
+        self.btn_update.Bind(wx.EVT_BUTTON, self.on_recalculate)
 
         self.SetSizer(main_sizer)
 
-    def update_values(self, radon_pci="6.94E+07", exposure_rate="7.28E-02"):
-        """Call this method to dynamically recalculate the displayed text."""
+    def update_values(self, total_activity_pci):
+        """Called by GammaRadiationPanel once the total activity is known."""
+        self.total_activity_pci = total_activity_pci
+        self.on_recalculate(None)
+
+    def on_recalculate(self, event):
+        if self.total_activity_pci is None:
+            return
+
+        distance_inches = safe_float(self.txt_distance, default=GAMMA_REFERENCE_DISTANCE_INCHES)
+        if distance_inches < self.MIN_DISTANCE_INCHES:
+            wx.MessageBox(
+                f"Distance from the tank wall must be at least "
+                f"{self.MIN_DISTANCE_INCHES:.0f} inches for this model.",
+                "Distance too small", wx.OK | wx.ICON_WARNING,
+            )
+            return
+
+        exposure_rate = gamma_exposure_rate_volume_source(self.total_activity_pci, distance_inches)
+
         updated_text = (
-            f"The estimated exposure rate 1 meter from the GAC filter wall for a "
-            f"volume distributed source of {radon_pci} pCi of radon in equilibrium "
-            f"with its progeny is: {exposure_rate} mR/hr"
+            f"The estimated exposure rate {distance_inches:.1f} inches from the GAC filter "
+            f"wall for a volume distributed source of {self.total_activity_pci:.2E} pCi of "
+            f"radon in equilibrium with its progeny is: {exposure_rate:.2E} mR/hr"
         )
         self.lbl_calc.SetLabel(updated_text)
         self.lbl_calc.Wrap(450)
@@ -1125,9 +1350,15 @@ class VolumeSourceTab(wx.Panel):
 #  Point Source tab - Gamma Radiation Screen
 # ---------------------------------------------------------------------------
 class PointSourceTab(wx.Panel):
-    """'Point source' tab matching screenshot reference."""
+    """'Point source' tab matching screenshot reference.
+
+    Live version, mirrors VolumeSourceTab but uses
+    GAC_physics.gamma_exposure_rate_point_source and has no minimum-distance
+    restriction on the input field.
+    """
     def __init__(self, parent):
         super().__init__(parent)
+        self.total_activity_pci = None  # None until Calculate has been pressed
 
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         main_sizer.AddSpacer(15)
@@ -1144,12 +1375,11 @@ class PointSourceTab(wx.Panel):
         self.box_panel.SetBackgroundColour(wx.Colour(210, 210, 210))  # Muted grey box background
         box_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        self.calc_text = (
-            "The estimated exposure rate 1 meter from the GAC filter center line "
-            "for a point source of 6.94E+07pCi of radon in equilibrium with its "
-            "progeny is: 8.54E-02 mR/hr"
+        self.lbl_calc = wx.StaticText(
+            self.box_panel,
+            label="Press Calculate above (after filling in the User input screen) "
+                  "to estimate the exposure rate.",
         )
-        self.lbl_calc = wx.StaticText(self.box_panel, label=self.calc_text)
         self.lbl_calc.Wrap(450)
         box_sizer.Add(self.lbl_calc, 1, wx.ALL | wx.EXPAND, 12)
         self.box_panel.SetSizer(box_sizer)
@@ -1165,18 +1395,45 @@ class PointSourceTab(wx.Panel):
         main_sizer.Add(instr_lbl, 0, wx.LEFT | wx.RIGHT, 25)
         main_sizer.AddSpacer(10)
 
-        # 4. Input Field
-        self.txt_distance = wx.TextCtrl(self, size=(140, 25), style=wx.TE_CENTER)
-        main_sizer.Add(self.txt_distance, 0, wx.ALIGN_CENTER)
+        # 4. Input Field + recompute button
+        dist_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.txt_distance = wx.TextCtrl(
+            self, value="39.4", size=(100, 25), style=wx.TE_CENTER | wx.TE_PROCESS_ENTER,
+        )
+        dist_row.Add(self.txt_distance, 0, wx.RIGHT, 8)
+        dist_row.Add(wx.StaticText(self, label="inches"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
+        self.btn_update = wx.Button(self, label="Update")
+        dist_row.Add(self.btn_update, 0)
+        main_sizer.Add(dist_row, 0, wx.ALIGN_CENTER)
+
+        self.txt_distance.Bind(wx.EVT_TEXT_ENTER, self.on_recalculate)
+        self.btn_update.Bind(wx.EVT_BUTTON, self.on_recalculate)
 
         self.SetSizer(main_sizer)
 
-    def update_values(self, radon_pci="6.94E+07", exposure_rate="8.54E-02"):
-        """Call this method to dynamically recalculate the displayed text."""
+    def update_values(self, total_activity_pci):
+        """Called by GammaRadiationPanel once the total activity is known."""
+        self.total_activity_pci = total_activity_pci
+        self.on_recalculate(None)
+
+    def on_recalculate(self, event):
+        if self.total_activity_pci is None:
+            return
+
+        distance_inches = safe_float(self.txt_distance, default=GAMMA_REFERENCE_DISTANCE_INCHES)
+        if distance_inches <= 0:
+            wx.MessageBox(
+                "Distance from the tank center line must be greater than 0 inches.",
+                "Invalid distance", wx.OK | wx.ICON_WARNING,
+            )
+            return
+
+        exposure_rate = gamma_exposure_rate_point_source(self.total_activity_pci, distance_inches)
+
         updated_text = (
-            f"The estimated exposure rate 1 meter from the GAC filter center line "
-            f"for a point source of {radon_pci}pCi of radon in equilibrium with its "
-            f"progeny is: {exposure_rate} mR/hr"
+            f"The estimated exposure rate {distance_inches:.1f} inches from the GAC filter "
+            f"center line for a point source of {self.total_activity_pci:.2E} pCi of radon "
+            f"in equilibrium with its progeny is: {exposure_rate:.2E} mR/hr"
         )
         self.lbl_calc.SetLabel(updated_text)
         self.lbl_calc.Wrap(450)
@@ -1187,9 +1444,19 @@ class PointSourceTab(wx.Panel):
 #  Safe Distance tab - Gamma Radiation Screen
 # ---------------------------------------------------------------------------
 class SafeDistanceTab(wx.Panel):
-    """The '"Safe distance"' tab content based on the reference layout."""
+    """The '"Safe distance"' tab content based on the reference layout.
+
+    Live version: total_activity_pci is pushed in from GammaRadiationPanel.
+    The "safe" distance (where the dose rate drops below the guideline
+    annual limit, assuming an 8 hr/day, 365 day/yr exposure) is recomputed
+    from GAC_physics.gamma_safe_distance_inches for both the current dose
+    limit and the legacy one previous CARBDOSE versions used, so the note
+    below stays consistent with whatever the physics file says those
+    limits are.
+    """
     def __init__(self, parent):
         super().__init__(parent)
+        self.total_activity_pci = None  # None until Calculate has been pressed
 
         main_sizer = wx.BoxSizer(wx.VERTICAL)
 
@@ -1199,38 +1466,70 @@ class SafeDistanceTab(wx.Panel):
         box = wx.StaticBox(self, label=" Distance considered to have acceptably small risk ")
         box_sizer = wx.StaticBoxSizer(box, wx.VERTICAL)
 
-        # Main Guideline Text (Bolded like the reference screenshot)
-        guideline_text = (
-            "Current residential exposure limit guideline based on Carbdose standard of "
-            "100 mrem per year for individuals in the general public.  "
-            "Distances from tank wall greater than 57.6 inches have probable doses "
-            "less than 0.034 mR/hr.  Calculated as a maximum above background for an "
-            "8 hr/day exposure, 365 days per year."
+        self.lbl_guideline = wx.StaticText(
+            self,
+            label="Press Calculate above (after filling in the User input screen) "
+                  "to estimate the safe distance.",
         )
-        lbl_guideline = wx.StaticText(self, label=guideline_text)
-        f_bold = lbl_guideline.GetFont()
+        f_bold = self.lbl_guideline.GetFont()
         f_bold.SetWeight(wx.FONTWEIGHT_BOLD)
-        lbl_guideline.SetFont(f_bold)
-        lbl_guideline.Wrap(480)  # Wrap to fit inside the panel nicely
+        self.lbl_guideline.SetFont(f_bold)
+        self.lbl_guideline.Wrap(480)  # Wrap to fit inside the panel nicely
 
-        box_sizer.Add(lbl_guideline, 1, wx.ALL | wx.EXPAND, 10)
+        box_sizer.Add(self.lbl_guideline, 1, wx.ALL | wx.EXPAND, 10)
         main_sizer.Add(box_sizer, 0, wx.ALL | wx.EXPAND, 15)
 
         # Spacer
         main_sizer.AddSpacer(20)
 
         # -------------------------------------------------------------------
-        # Lower Note Section
+        # Lower Note Section - legacy guideline for comparison
         # -------------------------------------------------------------------
-        note_text = (
-            "Note text"
+        self.lbl_note = wx.StaticText(self, label="")
+        self.lbl_note.Wrap(480)
+
+        main_sizer.Add(self.lbl_note, 0, wx.LEFT | wx.RIGHT | wx.EXPAND, 20)
+
+        self.SetSizer(main_sizer)
+
+    def update_values(self, total_activity_pci):
+        """Called by GammaRadiationPanel once the total activity is known."""
+        self.total_activity_pci = total_activity_pci
+
+        safe_distance_in, exposure_at_limit = gamma_safe_distance_inches(
+            total_activity_pci,
+            GAMMA_DOSE_LIMIT_MREM_YR,
+            GAMMA_EXPOSURE_HOURS_PER_DAY,
+            GAMMA_EXPOSURE_DAYS_PER_YEAR,
         )
-        lbl_note = wx.StaticText(self, label=note_text)
-        lbl_note.Wrap(480)
+        legacy_distance_in, legacy_exposure_at_limit = gamma_safe_distance_inches(
+            total_activity_pci,
+            GAMMA_DOSE_LIMIT_LEGACY_MREM_YR,
+            GAMMA_EXPOSURE_HOURS_PER_DAY,
+            GAMMA_EXPOSURE_DAYS_PER_YEAR,
+        )
 
-        main_sizer.Add(lbl_note, 0, wx.LEFT | wx.RIGHT | wx.EXPAND, 20)
+        guideline_text = (
+            f"Current residential exposure limit guideline based on a standard of "
+            f"{GAMMA_DOSE_LIMIT_MREM_YR:g} mrem per year for individuals in the general "
+            f"public.  Distances from tank wall greater than {safe_distance_in:.1f} inches "
+            f"have probable doses less than {exposure_at_limit:.3f} mR/hr.  Calculated as a "
+            f"maximum above background for an {GAMMA_EXPOSURE_HOURS_PER_DAY:g} hr/day exposure, "
+            f"{GAMMA_EXPOSURE_DAYS_PER_YEAR:g} days per year."
+        )
+        self.lbl_guideline.SetLabel(guideline_text)
+        self.lbl_guideline.Wrap(480)
 
-        self.SetSizer(main_sizer)        
+        note_text = (
+            f"Note that previous versions of this calculator used a different guideline. "
+            f"The formerly used {GAMMA_DOSE_LIMIT_LEGACY_MREM_YR:g} mrem/yr guideline yields "
+            f"distances from the tank wall greater than {legacy_distance_in:.1f} inches having "
+            f"probable exposures less than {legacy_exposure_at_limit:.3f} mR/hr."
+        )
+        self.lbl_note.SetLabel(note_text)
+        self.lbl_note.Wrap(480)
+
+        self.Layout()
         
 
 # ---------------------------------------------------------------------------
@@ -1578,6 +1877,7 @@ class ReadmeDialog(wx.Dialog):
 class MainFrame(wx.Frame):
     def __init__(self):
         super().__init__(None, title="GAC Radon Removal Calculator", size=(560, 680))
+        self.unit_system = "Ci"
         
         if os.path.exists(APP_ICON_PATH):
             icon = wx.Icon(APP_ICON_PATH, wx.BITMAP_TYPE_ICO)
@@ -1621,8 +1921,10 @@ class MainFrame(wx.Frame):
         menubar.Append(file_menu, "&File")
 
         bqci_menu = wx.Menu()
-        bqci_item = bqci_menu.Append(wx.ID_ANY, "Open Bq<->Ci Calculator")
-        self.Bind(wx.EVT_MENU, self.on_open_bqci, bqci_item)
+        bqci_calc = bqci_menu.Append(wx.ID_ANY, "Open Bq<->Ci Calculator")
+        self.bqci_setting_item = bqci_menu.Append(wx.ID_ANY, "Use Becquerel mode")
+        self.Bind(wx.EVT_MENU, self.on_open_bqci, bqci_calc)
+        self.Bind(wx.EVT_MENU, self.toggle_bqci, self.bqci_setting_item)
         menubar.Append(bqci_menu, "Bq<->Ci")
 
         protocol_menu = wx.Menu()
@@ -1648,21 +1950,52 @@ class MainFrame(wx.Frame):
     def on_open_bqci(self, event):
         BqCiDialog(self).Show()
 
+    def toggle_bqci(self, event):
+        """Flip the app-wide unit system between Curie and Becquerel and push
+        the change out to every panel via UNIT_CONFIG so labels, legends,
+        and displayed values all stay in sync with self.unit_system."""
+        self.unit_system = "Bq" if self.unit_system == "Ci" else "Ci"
+
+        # keep the menu entry telling the user what they'd switch *to* next
+        self.bqci_setting_item.SetItemLabel(
+            "Use Curie mode" if self.unit_system == "Bq" else "Use Becquerel mode"
+        )
+
+        self.refresh_all_units()
+
+    def refresh_all_units(self):
+        """Ask every panel that knows how to redraw itself in the current
+        unit system (self.unit_system / UNIT_CONFIG) to do so."""
+        for p in self.panels:
+            refresh = getattr(p, "refresh_units", None)
+            if callable(refresh):
+                refresh()
+
     def on_about(self, event):
-        webbrowser.open("https://github.com/Quinncknowles/GranCarb/blob/main/README.md")
+        url = "https://github.com/Quinncknowles/GranCarb/blob/main/README.md"
+        
+        if is_connected():
+            webbrowser.open(url)
+        else:
+            wx.MessageBox(
+                "You appear to be offline. Please connect to the internet to view the documentation.",
+                "Offline", 
+                wx.OK | wx.ICON_INFORMATION
+            )
 
     def on_print_values(self, event):
         uip = self.user_input_panel
         wdp = self.waste_disposal_panel
+        cfg = UNIT_CONFIG[self.unit_system]
         lines = [
             f"Calculation identifier: {uip.calc_id.GetValue()}",
-            f"Influent activity: {uip.influent_activity.GetValue()} pCi/l",
+            f"Influent activity: {uip.influent_activity.GetValue()} {cfg['influent_activity_unit']}",
             f"Influent volume: {uip.influent_volume.GetValue()} {uip.get_volume_unit()}",
             f"Removal efficiency: {uip.removal_efficiency.GetValue()} %",
             f"Days operating: {uip.days_operating.GetValue()}",
             "",
-            f"Waste disposal - Total Pb-210: {wdp.total_pb210.GetValue()} pCi",
-            f"Waste disposal - pCi/g Pb-210 (wet): {wdp.pci_per_g.GetValue()}",
+            f"Waste disposal - Total Pb-210: {wdp.total_pb210.GetValue()} {cfg['total_activity_unit']}",
+            f"Waste disposal - {cfg['waste_disposal_activity_unit']} Pb-210 (wet): {wdp.pci_per_g.GetValue()}",
         ]
         wx.MessageBox("\n".join(lines), "Current Values", wx.OK | wx.ICON_INFORMATION)
 
